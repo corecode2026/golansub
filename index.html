@@ -582,17 +582,220 @@
                 grid-template-columns: 1fr;
             }
 
-            .navbar {
+            .main-container {
+                padding: 12px;
+            }
+
+            .header {
                 flex-direction: column;
+                gap: 12px;
+                padding: 12px;
+                text-align: center;
+            }
+
+            .header h1 {
+                font-size: 20px;
+            }
+
+            .header-right {
+                width: 100%;
+                justify-content: center;
+                flex-wrap: wrap;
+            }
+
+            /* شريط التنقل: سحب أفقي سلس بدل التكديس الكامل */
+            .navbar {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scroll-snap-type: x proximity;
+                justify-content: flex-start;
+                padding-bottom: 6px;
+                margin: 0 -12px 16px -12px;
+                padding-inline: 12px;
+            }
+
+            .navbar::-webkit-scrollbar {
+                height: 4px;
+            }
+
+            .navbar::-webkit-scrollbar-thumb {
+                background: rgba(255, 255, 255, 0.2);
+                border-radius: 4px;
             }
 
             .navbar button {
-                width: 100%;
+                flex: 0 0 auto;
+                width: auto;
+                white-space: nowrap;
+                scroll-snap-align: start;
+                padding: 12px 16px;
+                min-height: 44px;
             }
 
             .modal-content {
                 padding: 20px;
+                max-height: 88vh;
+                overflow-y: auto;
+                border-radius: 15px 15px 0 0;
             }
+
+            .modal {
+                align-items: flex-end;
+            }
+
+            .modal.active {
+                animation: slideUpModal 0.25s ease;
+            }
+
+            /* أزرار أكبر وأسهل باللمس */
+            .btn, .btn-primary, .btn-secondary {
+                min-height: 48px;
+                font-size: 15px;
+            }
+
+            .delete-btn {
+                min-height: 40px;
+                padding: 8px 16px;
+                font-size: 13px;
+            }
+
+            .toggle-btn {
+                min-height: 48px;
+                padding: 10px;
+                font-size: 13px;
+            }
+
+            /* منع تكبير iOS التلقائي عند الضغط على الحقول */
+            .form-group input,
+            select,
+            input[type="text"],
+            input[type="password"],
+            input[type="number"] {
+                font-size: 16px !important;
+                min-height: 44px;
+            }
+
+            .login-card {
+                padding: 24px;
+            }
+
+            .subscription-card {
+                padding: 20px;
+            }
+
+            .stats {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 12px;
+            }
+
+            .stat-card {
+                padding: 15px;
+            }
+
+            .stat-card .number {
+                font-size: 24px;
+            }
+
+            .add-user-form {
+                padding: 20px;
+                margin: 12px auto;
+            }
+
+            /* تحويل الجداول الرئيسية إلى بطاقات سهلة التصفح باللمس */
+            .data-table thead {
+                display: none;
+            }
+
+            .data-table, .data-table tbody, .data-table tr, .data-table td {
+                display: block;
+                width: 100%;
+            }
+
+            .data-table {
+                margin-top: 12px;
+            }
+
+            .data-table tr {
+                background: rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 12px;
+                margin-bottom: 12px;
+                padding: 6px 14px;
+            }
+
+            .data-table tr:hover {
+                background: rgba(255, 255, 255, 0.09);
+            }
+
+            .data-table td {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 10px 0;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                text-align: left;
+            }
+
+            .data-table td:last-child {
+                border-bottom: none;
+            }
+
+            .data-table td[data-label]::before {
+                content: attr(data-label);
+                font-weight: bold;
+                color: rgba(255, 255, 255, 0.6);
+                font-size: 12px;
+                margin-left: 10px;
+            }
+
+            .data-table td[data-label="حذف"] {
+                justify-content: center;
+                padding-top: 12px;
+            }
+
+            .data-table td[data-label="حذف"]::before {
+                content: none;
+            }
+
+            .data-table td[data-label="حذف"] .delete-btn {
+                width: 100%;
+            }
+
+            /* جداول التقارير: سحب أفقي أنعم باللمس */
+            .table-container, .add-user-form > div[style*="overflow-x"] {
+                -webkit-overflow-scrolling: touch;
+            }
+        }
+
+        @media (max-width: 420px) {
+            .stats {
+                grid-template-columns: 1fr;
+            }
+
+            .login-card {
+                padding: 18px;
+            }
+
+            .navbar button {
+                font-size: 13px;
+                padding: 10px 14px;
+            }
+        }
+
+        @keyframes slideUpModal {
+            from { transform: translateY(30px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        /* لمسة تطبيق أصلي على كل الشاشات باللمس */
+        button, .btn, .delete-btn, .toggle-btn, .navbar button {
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        button:active, .btn:active, .delete-btn:active {
+            transform: scale(0.97);
         }
 
         select {
@@ -691,7 +894,7 @@
             <!-- المشتركين -->
             <div class="table-container" id="subscribersSection">
                 <h2>👤 قائمة المشتركين</h2>
-                <table>
+                <table class="data-table">
                     <thead>
                         <tr>
                             <th>رقم الهاتف</th>
@@ -708,7 +911,7 @@
             <!-- سجل الاشتراكات -->
             <div class="table-container" id="subscriptionsSection">
                 <h2>📋 سجل الاشتراكات</h2>
-                <table>
+                <table class="data-table">
                     <thead>
                         <tr>
                             <th>التاريخ</th>
@@ -878,7 +1081,7 @@
                 <button class="btn btn-primary" onclick="addNewUser()">➕ إضافة مستخدم</button>
 
                 <h3 style="margin-top: 40px; margin-bottom: 20px;">المستخدمين الحاليين</h3>
-                <table>
+                <table class="data-table">
                     <thead>
                         <tr>
                             <th>اسم المستخدم</th>
@@ -1906,8 +2109,8 @@
 
             tbody.innerHTML = users.map(user => `
                 <tr>
-                    <td>${user.username}</td>
-                    <td>
+                    <td data-label="اسم المستخدم">${user.username}</td>
+                    <td data-label="حذف">
                         <button class="delete-btn" onclick="deleteUserDirect('${user.username}')">حذف</button>
                     </td>
                 </tr>
@@ -1935,9 +2138,9 @@
                 
                 return `
                     <tr>
-                        <td>${phoneDisplay}</td>
-                        <td>${sub.name}</td>
-                        <td>
+                        <td data-label="رقم الهاتف">${phoneDisplay}</td>
+                        <td data-label="الاسم">${sub.name}</td>
+                        <td data-label="حذف">
                             <button class="delete-btn" onclick="deleteSubscriberDirect('${sub.phone}')">حذف</button>
                         </td>
                     </tr>
@@ -2178,15 +2381,15 @@
                 
                 return `
                     <tr>
-                        <td>${sub.date}</td>
-                        <td>${sub.location}</td>
-                        <td>${sub.name}</td>
-                        <td>${phoneDisplay}</td>
-                        <td>${sub.months || 1}</td>
-                        <td>${totalPrice}₪</td>
-                        <td>${pricePerItem}₪</td>
-                        <td>${sub.amount}₪</td>
-                        <td>
+                        <td data-label="التاريخ">${sub.date}</td>
+                        <td data-label="المكان">${sub.location}</td>
+                        <td data-label="الاسم">${sub.name}</td>
+                        <td data-label="الأرقام">${phoneDisplay}</td>
+                        <td data-label="الأشهر">${sub.months || 1}</td>
+                        <td data-label="المبلغ المدفوع">${totalPrice}₪</td>
+                        <td data-label="السعر لكل رقم">${pricePerItem}₪</td>
+                        <td data-label="المبلغ الأصلي">${sub.amount}₪</td>
+                        <td data-label="حذف">
                             <button class="delete-btn" onclick="deleteSubscriptionDirect(${index})">حذف</button>
                         </td>
                     </tr>
