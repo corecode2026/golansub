@@ -1024,7 +1024,11 @@
 
                 <!-- سجل الأنشطة -->
                 <div style="padding: 20px; background: rgba(102, 126, 234, 0.15); border-radius: 12px; margin-top: 30px; border: 2px solid rgba(102, 126, 234, 0.3);">
-                    <h3 style="margin-top: 0; margin-bottom: 20px; font-size: 18px;">📋 سجل الأنشطة والأمان</h3>
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
+                        <h3 style="margin: 0; font-size: 18px;">📋 سجل الأنشطة والأمان</h3>
+                        <button class="btn btn-primary" onclick="clearSecurityLog()" style="width: auto; padding: 8px 18px; font-size: 13px; background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);">🗑️ مسح السجل</button>
+                    </div>
+                    <input type="text" id="securityLogFilterInput" placeholder="🔍 فلترة حسب اسم المستخدم..." oninput="filterSecurityLog(this.value)" style="width: 100%; padding: 10px 12px; margin-bottom: 15px; border: none; border-radius: 8px; background: rgba(255, 255, 255, 0.1); color: white; font-size: 13px; font-family: 'Cairo', sans-serif;">
                     <div id="securityLog" style="max-height: 300px; overflow-y: auto; background: rgba(0, 0, 0, 0.2); padding: 15px; border-radius: 8px; font-size: 12px;">
                         <div style="text-align: center; opacity: 0.5;">جاري تحميل السجل...</div>
                     </div>
@@ -1304,6 +1308,25 @@
             return new Date(date).toLocaleDateString('ar-EG');
         }
 
+        // تحويل نص تاريخ عربي (بأرقام هندية أو عادية، مع علامات اتجاه خفية) إلى كائن Date صحيح
+        // هذا ضروري لأن toLocaleDateString('ar-EG') ينتج أرقاماً هندية (١٢٣) وعلامات اتجاه خفية
+        // لا يفهمها new Date() مباشرة، مما كان يكسر فلترة التقارير حسب التاريخ
+        function parseArabicDate(dateStr) {
+            if (!dateStr) return null;
+            // إزالة علامات الاتجاه الخفية (RLM/LRM/ALM) والمسافات
+            let clean = String(dateStr).replace(/[\u200e\u200f\u061c]/g, '').trim();
+
+            // تحويل الأرقام الهندية-العربية (٠-٩) والفارسية (۰-۹) إلى أرقام عادية
+            clean = clean.replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+            clean = clean.replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+
+            const parts = clean.split('/').map(p => parseInt(p, 10));
+            if (parts.length !== 3 || parts.some(isNaN)) return null;
+
+            const [day, month, year] = parts; // صيغة ar-EG: يوم/شهر/سنة
+            return new Date(year, month - 1, day);
+        }
+
         // توليد التقرير المحسّن
         function generateReport() {
             const { subscriptions } = loadData();
@@ -1331,11 +1354,57 @@
 
             // تصفية البيانات
             const filteredSubs = subscriptions.filter(sub => {
-                const subDate = new Date(sub.date.split('/').reverse().join('-'));
-                const dateMatch = subDate >= fromDate && subDate <= toDate;
+                const subDate = parseArabicDate(sub.date);
+                const dateMatch = subDate && subDate >= fromDate && subDate <= toDate;
                 const locationMatch = location === '' || sub.location === location;
                 return dateMatch && locationMatch;
             });
+
+            // بيانات الفترة لكل المحلات (بدون فلترة المحل) - تُستخدم لمقارنة المحلين
+            const periodSubs = subscriptions.filter(sub => {
+                const subDate = parseArabicDate(sub.date);
+                return subDate && subDate >= fromDate && subDate <= toDate;
+            });
+
+            const locationsInfo = getLocations();
+            const loc1Name = locationsInfo.location1.name;
+            const loc2Name = locationsInfo.location2.name;
+
+            const loc1Subs = periodSubs.filter(s => s.location === loc1Name);
+            const loc2Subs = periodSubs.filter(s => s.location === loc2Name);
+            const loc1Total = loc1Subs.reduce((sum, s) => sum + (s.totalPrice || s.amount), 0);
+            const loc2Total = loc2Subs.reduce((sum, s) => sum + (s.totalPrice || s.amount), 0);
+
+            const diff = loc1Total - loc2Total;
+            const diffAbs = Math.abs(diff);
+            const higherLocation = diff > 0 ? loc1Name : (diff < 0 ? loc2Name : null);
+            const maxTotal = Math.max(loc1Total, loc2Total);
+            const diffPercent = maxTotal > 0 ? ((diffAbs / maxTotal) * 100).toFixed(1) : '0.0';
+
+            const comparisonHTML = `
+                <div style="background: linear-gradient(135deg, rgba(102, 126, 234, 0.12) 0%, rgba(46, 204, 113, 0.12) 100%); padding: 25px; border-radius: 15px; margin-bottom: 30px; border: 2px solid rgba(255, 255, 255, 0.15);">
+                    <h3 style="text-align: center; margin: 0 0 20px 0; font-size: 18px;">⚖️ مقارنة الإيرادات بين المحلين لنفس الفترة</h3>
+                    <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 15px; align-items: center;">
+                        <div style="text-align: center; padding: 18px 10px; background: rgba(102, 126, 234, 0.18); border-radius: 12px; border: ${higherLocation === loc1Name ? '2px solid #667eea' : '2px solid transparent'};">
+                            <div style="font-size: 14px; opacity: 0.85; margin-bottom: 8px;">🏠 ${loc1Name}</div>
+                            <div style="font-size: 24px; font-weight: bold; color: #667eea;">₪ ${loc1Total.toLocaleString('ar-EG')}</div>
+                            <div style="font-size: 12px; opacity: 0.6; margin-top: 6px;">${loc1Subs.length} اشتراك</div>
+                        </div>
+                        <div style="text-align: center; font-size: 16px; font-weight: bold; opacity: 0.6;">VS</div>
+                        <div style="text-align: center; padding: 18px 10px; background: rgba(46, 204, 113, 0.15); border-radius: 12px; border: ${higherLocation === loc2Name ? '2px solid #2ecc71' : '2px solid transparent'};">
+                            <div style="font-size: 14px; opacity: 0.85; margin-bottom: 8px;">🏠 ${loc2Name}</div>
+                            <div style="font-size: 24px; font-weight: bold; color: #2ecc71;">₪ ${loc2Total.toLocaleString('ar-EG')}</div>
+                            <div style="font-size: 12px; opacity: 0.6; margin-top: 6px;">${loc2Subs.length} اشتراك</div>
+                        </div>
+                    </div>
+                    <div style="text-align: center; margin-top: 18px; padding: 14px; background: rgba(0, 0, 0, 0.2); border-radius: 12px; font-size: 14px;">
+                        ${diff === 0
+                            ? `📊 المحلان متساويان بالإيرادات خلال هذه الفترة`
+                            : `📈 <strong>${higherLocation}</strong> أعلى بـ <strong style="color: #2ecc71; font-size: 17px;">₪ ${diffAbs.toLocaleString('ar-EG')}</strong> عن المحل الآخر (فرق ${diffPercent}%)`
+                        }
+                    </div>
+                </div>
+            `;
 
             // حساب الإحصائيات
             const totalRevenue = filteredSubs.reduce((sum, sub) => sum + (sub.totalPrice || sub.amount), 0);
@@ -1366,6 +1435,8 @@
                         </div>
                     </div>
                 </div>
+
+                ${comparisonHTML}
 
                 <div class="stats" style="margin-bottom: 30px;">
                     <div class="glass stat-card" style="box-shadow: 0 8px 32px rgba(102, 126, 234, 0.2);">
@@ -1482,7 +1553,8 @@
         function addSecurityLog(message) {
             const logs = JSON.parse(localStorage.getItem('securityLogs') || '[]');
             const timestamp = new Date().toLocaleString('ar-EG');
-            logs.unshift({ message, timestamp });
+            const user = currentUser || 'النظام';
+            logs.unshift({ message, timestamp, user });
             
             // احفظ آخر 100 سجل فقط
             if (logs.length > 100) {
@@ -1493,6 +1565,26 @@
             updateSecurityLog();
         }
 
+        // فلترة سجل الأنشطة حسب اسم المستخدم
+        let securityLogFilter = '';
+        function filterSecurityLog(value) {
+            securityLogFilter = (value || '').trim();
+            updateSecurityLog();
+        }
+
+        // مسح سجل الأنشطة بالكامل (للمسؤول فقط)
+        function clearSecurityLog() {
+            if (currentUser !== ADMIN_USERNAME) {
+                alert('فقط المسؤول (admin) يمكنه مسح سجل الأنشطة');
+                return;
+            }
+            if (!confirm('هل تريد مسح سجل الأنشطة بالكامل؟ لا يمكن التراجع عن هذا الإجراء.')) return;
+
+            localStorage.setItem('securityLogs', JSON.stringify([]));
+            addSecurityLog('🗑️ تم مسح سجل الأنشطة بالكامل');
+            alert('تم مسح السجل بنجاح');
+        }
+
         // عرض سجل الأنشطة
         function updateSecurityLog() {
             const logs = JSON.parse(localStorage.getItem('securityLogs') || '[]');
@@ -1500,17 +1592,35 @@
             
             if (!logDiv) return;
 
-            if (logs.length === 0) {
-                logDiv.innerHTML = '<div style="text-align: center; opacity: 0.5;">لا توجد أنشطة مسجلة</div>';
+            const filtered = securityLogFilter
+                ? logs.filter(log => (log.user || 'النظام').toLowerCase().includes(securityLogFilter.toLowerCase()))
+                : logs;
+
+            if (filtered.length === 0) {
+                logDiv.innerHTML = `<div style="text-align: center; opacity: 0.5; padding: 20px;">${securityLogFilter ? 'لا توجد أنشطة لهذا المستخدم' : 'لا توجد أنشطة مسجلة'}</div>`;
                 return;
             }
 
-            logDiv.innerHTML = logs.map((log, idx) => `
-                <div style="padding: 8px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.1); ${idx % 2 === 0 ? 'background: rgba(102, 126, 234, 0.05)' : ''}">
-                    <div style="color: #667eea; font-weight: bold;">⏰ ${log.timestamp}</div>
-                    <div style="margin-top: 4px;">📌 ${log.message}</div>
-                </div>
-            `).join('');
+            logDiv.innerHTML = filtered.map((log) => {
+                let color = '#667eea'; // لون افتراضي
+                if (log.message.includes('🗑️') || log.message.includes('❌') || log.message.includes('⚠️')) {
+                    color = '#ff4757';
+                } else if (log.message.includes('✅') || log.message.includes('💰')) {
+                    color = '#2ecc71';
+                } else if (log.message.includes('🔒') || log.message.includes('🔓') || log.message.includes('🔑')) {
+                    color = '#f39c12';
+                }
+
+                return `
+                    <div style="padding: 12px; margin-bottom: 8px; background: rgba(255, 255, 255, 0.04); border-radius: 10px; border-right: 4px solid ${color};">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 6px;">
+                            <span style="background: rgba(102, 126, 234, 0.25); padding: 3px 12px; border-radius: 20px; font-size: 11px; font-weight: bold;">👤 ${log.user || 'النظام'}</span>
+                            <span style="color: rgba(255, 255, 255, 0.5); font-size: 11px;">⏰ ${log.timestamp}</span>
+                        </div>
+                        <div style="font-size: 13px;">${log.message}</div>
+                    </div>
+                `;
+            }).join('');
             
             convertEmojisToSVG();
         }
