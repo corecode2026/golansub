@@ -1,0 +1,2351 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>نظام إدارة الاشتراكات</title>
+    <style>
+        .svg-icon {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            margin-right: 5px;
+            vertical-align: middle;
+            stroke: currentColor;
+            fill: none;
+            stroke-width: 2;
+        }
+
+        .svg-icon-lg {
+            width: 24px;
+            height: 24px;
+        }
+
+        .svg-icon-xl {
+            width: 32px;
+            height: 32px;
+        }
+    </style>
+
+    <!-- Firebase SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/firebase@9.23.0/firebase-app-compat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/firebase@9.23.0/firebase-database-compat.js"></script>
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyBvUWNRAX7C9kz301-hVDJYMUU71Uqx5O8",
+            authDomain: "golansub-36c9a.firebaseapp.com",
+            databaseURL: "https://golansub-36c9a-default-rtdb.europe-west1.firebasedatabase.app",
+            projectId: "golansub-36c9a",
+            storageBucket: "golansub-36c9a.firebasestorage.app",
+            messagingSenderId: "552137852881",
+            appId: "1:552137852881:web:da1c6b599f65e54ed282f0"
+        };
+
+        let firebaseAvailable = false;
+        let db = null;
+        let dbRef = null;
+
+        // تهيئة آمنة - إذا فشل تحميل مكتبة فايربيز (لا انترنت، فايروول، إلخ) الموقع يشتغل محلياً بدون أي كسر
+        try {
+            if (typeof firebase !== 'undefined') {
+                firebase.initializeApp(firebaseConfig);
+                db = firebase.database();
+                dbRef = db.ref('subscriptionSystem');
+                firebaseAvailable = true;
+            } else {
+                console.warn('⚠️ مكتبة Firebase لم تُحمّل - سيعمل الموقع محلياً فقط على هذا الجهاز');
+            }
+        } catch (e) {
+            console.warn('⚠️ تعذر تهيئة Firebase - سيعمل الموقع محلياً فقط:', e.message);
+            firebaseAvailable = false;
+        }
+
+        let isSyncingFromFirebase = false; // لمنع الحلقة اللانهائية (نكتب → نسمع → نكتب)
+
+        // رفع البيانات المحلية إلى Firebase
+        function pushToFirebase() {
+            if (!firebaseAvailable || !dbRef) return;
+            if (isSyncingFromFirebase) return; // هذا التغيير جاء من فايربيز نفسه، لا ترسله مرة ثانية
+            try {
+                const payload = {
+                    users: JSON.parse(localStorage.getItem('users') || '[]'),
+                    subscribers: JSON.parse(localStorage.getItem('subscribers') || '[]'),
+                    subscriptions: JSON.parse(localStorage.getItem('subscriptions') || '[]'),
+                    settings: JSON.parse(localStorage.getItem('settings') || '{}'),
+                    securityLogs: JSON.parse(localStorage.getItem('securityLogs') || '[]'),
+                    siteLocked: localStorage.getItem('siteLocked') || 'false',
+                    siteLockPin: localStorage.getItem('siteLockPin') || '',
+                    adminPassword: localStorage.getItem(btoa('adminPassword')) || ''
+                };
+                dbRef.set(payload).catch(err => console.error('❌ خطأ رفع البيانات لفايربيز:', err));
+            } catch (e) {
+                console.error('❌ خطأ في تجهيز البيانات للرفع:', e);
+            }
+        }
+
+        // الاستماع لأي تغيير قادم من جهاز آخر وتحديث الواجهة فوراً
+        function listenToFirebase() {
+            if (!firebaseAvailable || !dbRef) return;
+            dbRef.on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (!data) return;
+
+                isSyncingFromFirebase = true;
+
+                localStorage.setItem('users', JSON.stringify(data.users || []));
+                localStorage.setItem('subscribers', JSON.stringify(data.subscribers || []));
+                localStorage.setItem('subscriptions', JSON.stringify(data.subscriptions || []));
+                localStorage.setItem('settings', JSON.stringify(data.settings || {}));
+                localStorage.setItem('securityLogs', JSON.stringify(data.securityLogs || []));
+                localStorage.setItem('siteLocked', data.siteLocked || 'false');
+                localStorage.setItem('siteLockPin', data.siteLockPin || '');
+                if (data.adminPassword) localStorage.setItem(btoa('adminPassword'), data.adminPassword);
+
+                // حدّث الواجهة فقط إذا كان المستخدم مسجل دخول وعلى الصفحة الرئيسية
+                if (typeof updateUI === 'function' && document.getElementById('mainContainer') && document.getElementById('mainContainer').style.display !== 'none') {
+                    updateUI();
+                    if (typeof updateSecurityLog === 'function') updateSecurityLog();
+                    if (typeof updateLockButton === 'function') updateLockButton();
+                }
+
+                isSyncingFromFirebase = false;
+            }, (error) => {
+                console.error('❌ خطأ الاتصال بفايربيز:', error);
+            });
+        }
+    </script>
+
+    <script>
+        // نظام الايقونات SVG
+        const SVG_ICONS = {
+            '🏠': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>',
+            '🏞️': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>',
+            '📊': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="2" x2="12" y2="22"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>',
+            '📝': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>',
+            '💰': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M9 9h6a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2z"></path></svg>',
+            '💾': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>',
+            '📥': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
+            '📤': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>',
+            '🔒': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>',
+            '🔓': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.2-1"></path></svg>',
+            '🔐': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>',
+            '🔑': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-9 9m0 0l-6-6a4 4 0 1 1 5.657-5.657l.001.001"></path><circle cx="11" cy="11" r="8"></circle></svg>',
+            '🗑️': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>',
+            '✅': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+            '❌': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>',
+            '⚠️': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3.05h16.94a2 2 0 0 0 1.71-3.05L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
+            '📆': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>',
+            '📅': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>',
+            '🗓️': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>',
+            '⏰': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
+            '👤': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>',
+            '👥': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>',
+            '⚙️': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M12 1v6"></path><path d="M12 17v6"></path><path d="M1 12h6"></path><path d="M17 12h6"></path><path d="M4.22 4.22l4.24 4.24"></path><path d="M15.54 15.54l4.24 4.24"></path><path d="M4.22 19.78l4.24-4.24"></path><path d="M15.54 8.46l4.24-4.24"></path></svg>',
+            '📋': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>',
+            '📌': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>',
+            '🚀': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>',
+            '💎': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7l9-5 9 5z"></path><path d="M3 7h18M12 21V7"></path></svg>',
+            '✨': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2l3.293 3.293a1 1 0 0 0 1.414 0L21 2M3 14.5a1.5 1.5 0 0 1 1.5-1.5h2a1.5 1.5 0 0 1 1.5 1.5v2a1.5 1.5 0 0 1-1.5 1.5h-2a1.5 1.5 0 0 1-1.5-1.5v-2z"></path></svg>',
+            '🎯': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>',
+            '📂': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>',
+            '🔄': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2-8.83"></path></svg>',
+            '🚪': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>',
+            '➕': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>'
+        };
+
+        // دالة آمنة لاستبدال الايموجيات بـ SVG
+        function convertEmojisToSVG() {
+            // المسافات والعناصر التي لا تحتوي على SVGs
+            const excludeTags = ['script', 'style', 'code', 'pre'];
+            
+            // دالة للمعالجة العودية
+            function processNode(node) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const text = node.textContent;
+                    let hasEmoji = false;
+                    
+                    // التحقق من وجود أي ايموجي
+                    for (const emoji in SVG_ICONS) {
+                        if (text.includes(emoji)) {
+                            hasEmoji = true;
+                            break;
+                        }
+                    }
+                    
+                    if (hasEmoji) {
+                        const span = document.createElement('span');
+                        let html = text;
+                        
+                        // استبدال كل ايموجي بـ SVG
+                        for (const emoji in SVG_ICONS) {
+                            const regex = new RegExp(emoji, 'g');
+                            html = html.replace(regex, `<span class="svg-icon">${SVG_ICONS[emoji]}</span>`);
+                        }
+                        
+                        span.innerHTML = html;
+                        node.parentNode.replaceChild(span, node);
+                    }
+                } else if (node.nodeType === Node.ELEMENT_NODE && !excludeTags.includes(node.tagName.toLowerCase())) {
+                    // معالجة جميع العناصر الفرعية
+                    const children = Array.from(node.childNodes);
+                    children.forEach(child => processNode(child));
+                }
+            }
+            
+            processNode(document.body);
+        }
+
+        // تنفيذ التحويل عند تحميل الصفحة
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', convertEmojisToSVG);
+        } else {
+            convertEmojisToSVG();
+        }
+    </script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Cairo', 'Arial', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            min-height: 100vh;
+            direction: rtl;
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 15px;
+        }
+
+        /* تسجيل الدخول */
+        .login-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 400px;
+            padding: 40px;
+        }
+
+        .login-card h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 24px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.15);
+            color: #fff;
+            font-size: 14px;
+        }
+
+        .form-group input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .form-group input:focus {
+            outline: none;
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: 'Cairo', sans-serif;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            margin-top: 10px;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        /* الصفحة الرئيسية */
+        .main-container {
+            display: none;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding: 20px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+        }
+
+        .header-right {
+            display: flex;
+            gap: 10px;
+        }
+
+        .navbar {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .navbar button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .navbar button.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .navbar button:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .toggle-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .toggle-btn {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: 'Cairo', sans-serif;
+            font-size: 14px;
+        }
+
+        .toggle-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-color: #667eea;
+        }
+
+        .hidden-field {
+            display: none;
+        }
+
+        .content {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* الاشتراكات */
+        .subscriptions-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .subscription-card {
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .subscription-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(102, 126, 234, 0.3);
+        }
+
+        .subscription-card h2 {
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+
+        .subscription-card .price {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .subscription-card .period {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 20px;
+        }
+
+        .subscription-card .btn {
+            width: 100%;
+        }
+
+        /* نافذة الدفع */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 40px;
+            border-radius: 15px;
+            width: 100%;
+            max-width: 500px;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal-content h2 {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .close {
+            float: left;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            color: #fff;
+        }
+
+        /* الجداول */
+        .table-container {
+            display: none;
+            overflow-x: auto;
+        }
+
+        .table-container.active {
+            display: block;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th, td {
+            padding: 15px;
+            text-align: right;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        th {
+            background: rgba(255, 255, 255, 0.1);
+            font-weight: bold;
+        }
+
+        tr:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .delete-btn {
+            padding: 5px 10px;
+            background: #ff4757;
+            border: none;
+            border-radius: 5px;
+            color: white;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .delete-btn:hover {
+            background: #ff3838;
+        }
+
+        /* إضافة المستخدمين */
+        .add-user-form {
+            display: none;
+            padding: 30px;
+            max-width: 500px;
+            margin: 20px auto;
+        }
+
+        .add-user-form.active {
+            display: block;
+        }
+
+        .add-user-form h2 {
+            margin-bottom: 20px;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .alert-success {
+            background: rgba(46, 204, 113, 0.3);
+            color: #2ecc71;
+            border: 1px solid #2ecc71;
+        }
+
+        .alert-error {
+            background: rgba(255, 71, 87, 0.3);
+            color: #ff4757;
+            border: 1px solid #ff4757;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            padding: 20px;
+            text-align: center;
+        }
+
+        .stat-card h3 {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 10px;
+        }
+
+        .stat-card .number {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        @media (max-width: 768px) {
+            .subscriptions-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .navbar {
+                flex-direction: column;
+            }
+
+            .navbar button {
+                width: 100%;
+            }
+
+            .modal-content {
+                padding: 20px;
+            }
+        }
+
+        select {
+            font-family: 'Cairo', sans-serif;
+        }
+
+        select option {
+            background: #16213e;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <!-- صفحة تسجيل الدخول -->
+    <div class="login-container" id="loginContainer">
+        <div class="glass login-card">
+            <h1>🏠 نظام الاشتراكات</h1>
+            <div id="alertLogin"></div>
+            <div class="form-group">
+                <label>اسم المستخدم</label>
+                <input type="text" id="loginUsername" placeholder="أدخل اسم المستخدم">
+            </div>
+            <div class="form-group">
+                <label>كلمة المرور</label>
+                <input type="password" id="loginPassword" placeholder="أدخل كلمة المرور">
+            </div>
+            <button class="btn btn-primary" onclick="handleLogin()">✅ دخول</button>
+            <button class="btn btn-secondary" onclick="showRegisterForm()">✨ تسجيل حساب جديد</button>
+        </div>
+    </div>
+
+    <!-- الصفحة الرئيسية -->
+    <div class="main-container" id="mainContainer">
+        <div class="header glass">
+            <h1>🏠 نظام إدارة الاشتراكات</h1>
+            <div class="header-right">
+                <span id="currentUser"></span>
+                <button class="btn btn-secondary" style="width: auto;" onclick="handleLogout()">🚪 خروج</button>
+            </div>
+        </div>
+
+        <div class="navbar">
+            <button class="active" onclick="showSection('home')">🏠 الرئيسية</button>
+            <button onclick="showSection('subscribers')">👤 المشتركين</button>
+            <button onclick="showSection('subscriptions')">📋 سجل الاشتراكات</button>
+            <button onclick="showSection('reports')" id="reportsBtn">📊 التقارير</button>
+            <button onclick="showSection('security')" id="securityBtn">🔒 الأمان والحماية</button>
+            <button onclick="showSection('users')" id="usersBtn">👥 إدارة المستخدمين</button>
+            <button onclick="showSection('settings')" id="settingsBtn">⚙️ الإعدادات</button>
+        </div>
+
+        <div class="content">
+            <!-- الرئيسية -->
+            <div id="homeSection">
+                <div class="stats">
+                    <div class="glass stat-card">
+                        <h3>📊 إجمالي المشتركين</h3>
+                        <div class="number" id="totalSubscribers">0</div>
+                    </div>
+                    <div class="glass stat-card">
+                        <h3>📝 إجمالي الاشتراكات</h3>
+                        <div class="number" id="totalSubscriptions">0</div>
+                    </div>
+                </div>
+
+                <div style="margin: 30px 0; padding: 20px; background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%); border-radius: 15px; border: 2px solid rgba(102, 126, 234, 0.3);">
+                    <h3 style="text-align: center; margin-bottom: 20px; font-size: 22px;">💰 الإيرادات حسب المحل</h3>
+                    <div class="stats">
+                        <div class="glass stat-card" style="box-shadow: 0 8px 32px rgba(102, 126, 234, 0.25);">
+                            <h3 id="location1Title" style="font-size: 16px;">🏠 بيت حنينا</h3>
+                            <div class="number" id="location1Revenue" style="font-size: 32px; color: #2ecc71;">₪ 0</div>
+                        </div>
+                        <div class="glass stat-card" style="box-shadow: 0 8px 32px rgba(102, 126, 234, 0.25);">
+                            <h3 id="location2Title" style="font-size: 16px;">🏞️ قلنديا</h3>
+                            <div class="number" id="location2Revenue" style="font-size: 32px; color: #2ecc71;">₪ 0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="subscriptions-grid">
+                    <div class="glass subscription-card">
+                        <h2>🏡 بيت حنينا</h2>
+                        <div class="price">250₪</div>
+                        <div class="period">الاشتراك الشهري</div>
+                        <button class="btn btn-primary" onclick="openPaymentModal('بيت حنينا', 250)">💰 دفع الاشتراك</button>
+                    </div>
+                    <div class="glass subscription-card">
+                        <h2>🏞️ قلنديا</h2>
+                        <div class="price">200₪</div>
+                        <div class="period">الاشتراك الشهري</div>
+                        <button class="btn btn-primary" onclick="openPaymentModal('قلنديا', 200)">💰 دفع الاشتراك</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- المشتركين -->
+            <div class="table-container" id="subscribersSection">
+                <h2>👤 قائمة المشتركين</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>رقم الهاتف</th>
+                            <th>الاسم</th>
+                            <th>حذف</th>
+                        </tr>
+                    </thead>
+                    <tbody id="subscribersTable">
+                        <tr><td colspan="3" style="text-align: center;">لا توجد بيانات</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- سجل الاشتراكات -->
+            <div class="table-container" id="subscriptionsSection">
+                <h2>📋 سجل الاشتراكات</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>التاريخ</th>
+                            <th>المكان</th>
+                            <th>الاسم</th>
+                            <th>الأرقام</th>
+                            <th>الأشهر</th>
+                            <th>المبلغ المدفوع</th>
+                            <th>السعر لكل رقم</th>
+                            <th>المبلغ الأصلي</th>
+                            <th>حذف</th>
+                        </tr>
+                    </thead>
+                    <tbody id="subscriptionsTable">
+                        <tr><td colspan="9" style="text-align: center;">لا توجد بيانات</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- التقارير -->
+            <div class="add-user-form glass" id="reportsSection">
+                <h2 style="text-align: center; margin-bottom: 30px; font-size: 26px;">📊 التقارير والكشفات المالية</h2>
+                
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom: 30px;">
+                    <div class="form-group">
+                        <label style="font-weight: bold; margin-bottom: 10px; display: block;">📍 اختر المحل</label>
+                        <select id="reportLocation" onchange="generateReport()" style="width: 100%; padding: 12px; border: none; border-radius: 8px; background: rgba(255, 255, 255, 0.15); color: white; font-size: 14px; cursor: pointer;">
+                            <option value="">📊 جميع المحلات</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label style="font-weight: bold; margin-bottom: 10px; display: block;">📅 اختر الفترة</label>
+                        <select id="reportPeriod" onchange="updateReportFields(); generateReport();" style="width: 100%; padding: 12px; border: none; border-radius: 8px; background: rgba(255, 255, 255, 0.15); color: white; font-size: 14px; cursor: pointer;">
+                            <option value="monthly">📆 الشهر الحالي</option>
+                            <option value="week">📅 هذا الأسبوع</option>
+                            <option value="custom">🗓️ من تاريخ إلى تاريخ</option>
+                        </select>
+                    </div>
+
+                    <div id="customDateFields" style="display: none;">
+                        <div class="form-group">
+                            <label style="font-weight: bold; margin-bottom: 10px; display: block;">من التاريخ</label>
+                            <input type="date" id="reportFromDate" onchange="generateReport()" style="width: 100%; padding: 12px; border: none; border-radius: 8px; background: rgba(255, 255, 255, 0.15); color: white;">
+                        </div>
+                    </div>
+
+                    <div id="customDateFields2" style="display: none;">
+                        <div class="form-group">
+                            <label style="font-weight: bold; margin-bottom: 10px; display: block;">إلى التاريخ</label>
+                            <input type="date" id="reportToDate" onchange="generateReport()" style="width: 100%; padding: 12px; border: none; border-radius: 8px; background: rgba(255, 255, 255, 0.15); color: white;">
+                        </div>
+                    </div>
+                </div>
+
+                <div id="reportContent"></div>
+            </div>
+
+            <!-- الأمان والحماية -->
+            <div class="add-user-form glass" id="securitySection">
+                <h2 style="text-align: center; margin-bottom: 30px; font-size: 26px;">🔒 الأمان والحماية والتخزين</h2>
+                
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 30px;">
+                    <!-- النسخ الاحتياطية -->
+                    <div style="padding: 20px; background: rgba(102, 126, 234, 0.1); border-radius: 12px; border-left: 4px solid #667eea;">
+                        <h3 style="margin-top: 0; margin-bottom: 15px;">💾 النسخ الاحتياطية</h3>
+                        <p style="font-size: 13px; opacity: 0.8; margin-bottom: 15px;">احفظ نسخة من جميع بيانات النظام</p>
+                        <button class="btn btn-primary" onclick="createBackup()" style="width: 100%;">📥 إنشاء نسخة احتياطية</button>
+                        <div id="backupStatus" style="margin-top: 10px; font-size: 12px; opacity: 0.7; text-align: center;"></div>
+                    </div>
+
+                    <!-- تصدير البيانات -->
+                    <div style="padding: 20px; background: rgba(76, 175, 80, 0.1); border-radius: 12px; border-left: 4px solid #2ecc71;">
+                        <h3 style="margin-top: 0; margin-bottom: 15px;">📥 تصدير البيانات</h3>
+                        <p style="font-size: 13px; opacity: 0.8; margin-bottom: 15px;">تنزيل البيانات بصيغ مختلفة</p>
+                        <button class="btn btn-primary" onclick="exportDataJSON()" style="width: 100%; background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);">📊 تصدير JSON</button>
+                        <button class="btn btn-primary" onclick="exportDataCSV()" style="width: 100%; background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%); margin-top: 8px;">📊 تصدير CSV</button>
+                    </div>
+
+                    <!-- استيراد البيانات -->
+                    <div style="padding: 20px; background: rgba(241, 196, 15, 0.1); border-radius: 12px; border-left: 4px solid #f39c12;">
+                        <h3 style="margin-top: 0; margin-bottom: 15px;">📤 استيراد البيانات</h3>
+                        <p style="font-size: 13px; opacity: 0.8; margin-bottom: 15px;">استرجع البيانات من نسخة احتياطية</p>
+                        <input type="file" id="importFile" accept=".json" style="display: none;">
+                        <button class="btn btn-primary" onclick="document.getElementById('importFile').click()" style="width: 100%; background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);">📂 اختر ملف</button>
+                        <div id="importStatus" style="margin-top: 10px; font-size: 12px; opacity: 0.7; text-align: center;"></div>
+                    </div>
+
+                    <!-- قفل الموقع -->
+                    <div style="padding: 20px; background: rgba(231, 76, 60, 0.1); border-radius: 12px; border-left: 4px solid #e74c3c;">
+                        <h3 style="margin-top: 0; margin-bottom: 15px;">🔐 قفل الموقع</h3>
+                        <p style="font-size: 13px; opacity: 0.8; margin-bottom: 15px;">قفل الموقع برمز PIN سري</p>
+                        <button class="btn btn-primary" onclick="toggleSiteLock()" id="lockBtn" style="width: 100%; background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);">🔐 تفعيل القفل</button>
+                    </div>
+
+                    <!-- تغيير كلمة المرور الرئيسية -->
+                    <div style="padding: 20px; background: rgba(155, 89, 182, 0.1); border-radius: 12px; border-left: 4px solid #9b59b6;">
+                        <h3 style="margin-top: 0; margin-bottom: 15px;">🔑 كلمة المرور الرئيسية</h3>
+                        <p style="font-size: 13px; opacity: 0.8; margin-bottom: 15px;">غير كلمة المرور الرئيسية للمسؤول</p>
+                        <button class="btn btn-primary" onclick="changeAdminPassword()" style="width: 100%; background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);">🔑 تغيير كلمة المرور</button>
+                    </div>
+
+                    <!-- حذف البيانات بأمان -->
+                    <div style="padding: 20px; background: rgba(52, 73, 94, 0.1); border-radius: 12px; border-left: 4px solid #34495e;">
+                        <h3 style="margin-top: 0; margin-bottom: 15px;">🗑️ حذف البيانات</h3>
+                        <p style="font-size: 13px; opacity: 0.8; margin-bottom: 15px;">احذف جميع البيانات نهائياً</p>
+                        <button class="btn btn-primary" onclick="secureDelete()" style="width: 100%; background: linear-gradient(135deg, #34495e 0%, #2c3e50 100%);">⚠️ حذف آمن</button>
+                    </div>
+                </div>
+
+                <!-- سجل الأنشطة -->
+                <div style="padding: 20px; background: rgba(102, 126, 234, 0.15); border-radius: 12px; margin-top: 30px; border: 2px solid rgba(102, 126, 234, 0.3);">
+                    <h3 style="margin-top: 0; margin-bottom: 20px; font-size: 18px;">📋 سجل الأنشطة والأمان</h3>
+                    <div id="securityLog" style="max-height: 300px; overflow-y: auto; background: rgba(0, 0, 0, 0.2); padding: 15px; border-radius: 8px; font-size: 12px;">
+                        <div style="text-align: center; opacity: 0.5;">جاري تحميل السجل...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- الإعدادات -->
+            <div class="add-user-form glass" id="settingsSection">
+                <h2>⚙️ الإعدادات</h2>
+                <div id="alertSettings"></div>
+                
+                <h3 style="margin-top: 20px; margin-bottom: 15px;">تعديل أسماء المحلات</h3>
+                
+                <div class="form-group">
+                    <label>اسم المحل الأول</label>
+                    <input type="text" id="location1Name" placeholder="أدخل اسم المحل الأول">
+                </div>
+                
+                <div class="form-group">
+                    <label>سعر الاشتراك للمحل الأول (₪)</label>
+                    <input type="number" id="location1Price" placeholder="أدخل السعر" step="10">
+                </div>
+
+                <div class="form-group">
+                    <label>اسم المحل الثاني</label>
+                    <input type="text" id="location2Name" placeholder="أدخل اسم المحل الثاني">
+                </div>
+                
+                <div class="form-group">
+                    <label>سعر الاشتراك للمحل الثاني (₪)</label>
+                    <input type="number" id="location2Price" placeholder="أدخل السعر" step="10">
+                </div>
+
+                <button class="btn btn-primary" onclick="saveSettings()">💾 حفظ الإعدادات</button>
+                <button class="btn btn-secondary" onclick="resetSettings()" style="margin-top: 10px;">🔄 إعادة تعيين</button>
+            </div>
+
+            <!-- إدارة المستخدمين -->
+            <div class="add-user-form glass" id="usersSection">
+                <h2>👥 إدارة المستخدمين</h2>
+                <div id="alertUsers"></div>
+                <div class="form-group">
+                    <label>اسم المستخدم الجديد</label>
+                    <input type="text" id="newUsername" placeholder="أدخل اسم المستخدم">
+                </div>
+                <div class="form-group">
+                    <label>كلمة المرور الجديدة</label>
+                    <input type="password" id="newPassword" placeholder="أدخل كلمة المرور">
+                </div>
+                <div class="form-group">
+                    <label>تأكيد كلمة المرور</label>
+                    <input type="password" id="confirmPassword" placeholder="أعد إدخال كلمة المرور">
+                </div>
+                <button class="btn btn-primary" onclick="addNewUser()">➕ إضافة مستخدم</button>
+
+                <h3 style="margin-top: 40px; margin-bottom: 20px;">المستخدمين الحاليين</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>اسم المستخدم</th>
+                            <th>حذف</th>
+                        </tr>
+                    </thead>
+                    <tbody id="usersTable">
+                        <tr><td colspan="2" style="text-align: center;">لا توجد بيانات</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- نافذة الدفع -->
+    <div class="modal" id="paymentModal">
+        <div class="modal-content glass">
+            <span class="close" onclick="closePaymentModal()">&times;</span>
+            <h2 id="modalTitle">الاشتراك</h2>
+            <div id="alertModal"></div>
+            
+            <div class="form-group">
+                <label>الاسم</label>
+                <input type="text" id="subscriberName" placeholder="أدخل الاسم الكامل">
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 10px;">نوع إدخال الأرقام:</label>
+                <div class="toggle-group">
+                    <button class="toggle-btn active" onclick="togglePhoneMode('write')">رقم هاتف فقط</button>
+                    <button class="toggle-btn" onclick="togglePhoneMode('mixed')">رقم هاتف + عدد أرقام</button>
+                </div>
+            </div>
+
+            <div id="phoneWriteField">
+                <div class="form-group">
+                    <label>رقم الهاتف</label>
+                    <input type="text" id="subscriberPhone" placeholder="أدخل رقم الهاتف">
+                </div>
+            </div>
+
+            <div id="phoneMixedField" class="hidden-field">
+                <div class="form-group">
+                    <label>رقم الهاتف</label>
+                    <input type="text" id="subscriberPhoneMixed" placeholder="أدخل رقم الهاتف">
+                </div>
+                <div class="form-group">
+                    <label>عدد الأرقام الإضافية</label>
+                    <input type="number" id="phoneCountMixed" min="1" placeholder="كم رقم إضافي؟" value="1" onchange="calculatePriceByQuantity('mixed')">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>عدد الأشهر</label>
+                <input type="number" id="months" min="1" placeholder="كم شهر؟" value="1">
+            </div>
+
+            <div class="form-group" id="pricePerItemField" style="display: none;">
+                <label>السعر لكل رقم (₪)</label>
+                <input type="number" id="pricePerItem" placeholder="السعر لكل رقم" step="10">
+            </div>
+
+            <div class="form-group" id="totalPriceDisplay" style="display: none;">
+                <label>المبلغ الكلي المدفوع</label>
+                <input type="text" id="totalPrice" disabled style="background: rgba(255, 255, 255, 0.2); cursor: not-allowed;">
+            </div>
+
+            <button class="btn btn-primary" onclick="processPayment()">✅ تأكيد الدفع</button>
+        </div>
+    </div>
+
+    <script>
+        const ADMIN_USERNAME = 'admin';
+        const ADMIN_PASSWORD = 'admin';
+
+        let currentUser = null;
+        let currentSubscription = {
+            name: '',
+            price: 0
+        };
+        let phoneMode = 'write'; // 'write' أو 'count'
+
+        // تحميل البيانات
+        function loadData() {
+            const users = JSON.parse(localStorage.getItem('users') || '[]');
+            const subscribers = JSON.parse(localStorage.getItem('subscribers') || '[]');
+            const subscriptions = JSON.parse(localStorage.getItem('subscriptions') || '[]');
+            const settings = JSON.parse(localStorage.getItem('settings') || '{}');
+            return { users, subscribers, subscriptions, settings };
+        }
+
+        // حفظ البيانات
+        function saveData(data) {
+            localStorage.setItem('users', JSON.stringify(data.users));
+            localStorage.setItem('subscribers', JSON.stringify(data.subscribers));
+            localStorage.setItem('subscriptions', JSON.stringify(data.subscriptions));
+            if (data.settings) localStorage.setItem('settings', JSON.stringify(data.settings));
+            
+            // رفع التحديث فوراً لكل الأجهزة الأخرى
+            pushToFirebase();
+        }
+
+        // الحصول على الإعدادات الافتراضية
+        function getDefaultSettings() {
+            return {
+                location1: { name: 'بيت حنينا', price: 250 },
+                location2: { name: 'قلنديا', price: 200 }
+            };
+        }
+
+        // الحصول على إعدادات المحلات
+        function getLocations() {
+            const { settings } = loadData();
+            return { ...getDefaultSettings(), ...settings };
+        }
+
+        // تسجيل الدخول
+        function handleLogin() {
+            const username = document.getElementById('loginUsername').value;
+            const password = document.getElementById('loginPassword').value;
+            const alert = document.getElementById('alertLogin');
+
+            if (!username || !password) {
+                showAlert(alert, 'يرجى ملء جميع الحقول', 'error');
+                return;
+            }
+
+            const { users } = loadData();
+            const user = users.find(u => u.username === username && u.password === password);
+
+            if (user || (username === ADMIN_USERNAME && password === ADMIN_PASSWORD)) {
+                currentUser = username;
+                showMainContainer();
+            } else {
+                showAlert(alert, 'اسم المستخدم أو كلمة المرور غير صحيحة', 'error');
+            }
+        }
+
+        // تسجيل حساب جديد
+        function showRegisterForm() {
+            const { users, subscribers, subscriptions, settings } = loadData();
+            const username = prompt('أدخل اسم المستخدم الجديد:');
+            if (!username) return;
+
+            const password = prompt('أدخل كلمة المرور:');
+            if (!password) return;
+
+            if (users.some(u => u.username === username) || username === ADMIN_USERNAME) {
+                alert('اسم المستخدم موجود بالفعل');
+                return;
+            }
+
+            users.push({ username, password });
+            saveData({ users, subscribers, subscriptions, settings });
+            alert('تم إنشاء الحساب بنجاح');
+        }
+
+        // خروج
+        function handleLogout() {
+            currentUser = null;
+            document.getElementById('loginUsername').value = '';
+            document.getElementById('loginPassword').value = '';
+            document.getElementById('loginContainer').style.display = 'flex';
+            document.getElementById('mainContainer').style.display = 'none';
+        }
+
+        // إظهار الحاوية الرئيسية
+        function showMainContainer() {
+            document.getElementById('loginContainer').style.display = 'none';
+            document.getElementById('mainContainer').style.display = 'block';
+            document.getElementById('currentUser').textContent = `مرحباً: ${currentUser}`;
+            
+            // إخفاء زر إدارة المستخدمين والإعدادات للمستخدمين العاديين
+            const usersBtn = document.getElementById('usersBtn');
+            const settingsBtn = document.getElementById('settingsBtn');
+            if (currentUser === ADMIN_USERNAME) {
+                usersBtn.style.display = 'inline-block';
+                settingsBtn.style.display = 'inline-block';
+            } else {
+                usersBtn.style.display = 'none';
+                settingsBtn.style.display = 'none';
+            }
+            
+            // تهيئة المحلات
+            initializeLocations();
+            updateUI();
+        }
+
+        // تحديث حقول التقرير
+        function updateReportFields() {
+            const period = document.getElementById('reportPeriod').value;
+            const customDateFields = document.getElementById('customDateFields');
+            const customDateFields2 = document.getElementById('customDateFields2');
+            
+            if (period === 'custom') {
+                customDateFields.style.display = 'block';
+                customDateFields2.style.display = 'block';
+            } else {
+                customDateFields.style.display = 'none';
+                customDateFields2.style.display = 'none';
+            }
+        }
+
+        // حساب التاريخ الأول من الشهر الحالي
+        function getMonthStart() {
+            const today = new Date();
+            return new Date(today.getFullYear(), today.getMonth(), 1);
+        }
+
+        // حساب بداية الأسبوع الحالي
+        function getWeekStart() {
+            const today = new Date();
+            const day = today.getDay();
+            const diff = today.getDate() - day + (day === 0 ? -6 : 1);
+            return new Date(today.setDate(diff));
+        }
+
+        // تحويل التاريخ إلى صيغة محلية
+        function formatDate(date) {
+            return new Date(date).toLocaleDateString('ar-EG');
+        }
+
+        // توليد التقرير المحسّن
+        function generateReport() {
+            const { subscriptions } = loadData();
+            const location = document.getElementById('reportLocation').value;
+            const period = document.getElementById('reportPeriod').value;
+            let fromDate, toDate;
+
+            if (period === 'monthly') {
+                fromDate = getMonthStart();
+                toDate = new Date();
+            } else if (period === 'week') {
+                fromDate = getWeekStart();
+                toDate = new Date();
+            } else if (period === 'custom') {
+                const fromInput = document.getElementById('reportFromDate').value;
+                const toInput = document.getElementById('reportToDate').value;
+                
+                if (!fromInput || !toInput) {
+                    return;
+                }
+                
+                fromDate = new Date(fromInput);
+                toDate = new Date(toInput);
+            }
+
+            // تصفية البيانات
+            const filteredSubs = subscriptions.filter(sub => {
+                const subDate = new Date(sub.date.split('/').reverse().join('-'));
+                const dateMatch = subDate >= fromDate && subDate <= toDate;
+                const locationMatch = location === '' || sub.location === location;
+                return dateMatch && locationMatch;
+            });
+
+            // حساب الإحصائيات
+            const totalRevenue = filteredSubs.reduce((sum, sub) => sum + (sub.totalPrice || sub.amount), 0);
+            const totalSubscriptions = filteredSubs.length;
+            const averagePerSubscription = totalSubscriptions > 0 ? (totalRevenue / totalSubscriptions).toFixed(2) : 0;
+            
+            const groupByLocation = {};
+            filteredSubs.forEach(sub => {
+                if (!groupByLocation[sub.location]) {
+                    groupByLocation[sub.location] = [];
+                }
+                groupByLocation[sub.location].push(sub);
+            });
+
+            // عرض التقرير المحسّن
+            let reportHTML = `
+                <div style="background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%); padding: 25px; border-radius: 15px; margin-bottom: 30px; border: 2px solid rgba(102, 126, 234, 0.3);">
+                    <div style="margin-bottom: 15px;">
+                        <h3 style="font-size: 18px; margin: 0 0 10px 0;">📋 تفاصيل الفترة</h3>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; font-size: 15px;">
+                            <div>
+                                <span style="opacity: 0.8;">📅 من:</span> <strong>${formatDate(fromDate)}</strong>
+                            </div>
+                            <div>
+                                <span style="opacity: 0.8;">📅 إلى:</span> <strong>${formatDate(toDate)}</strong>
+                            </div>
+                            ${location ? `<div style="grid-column: 1/-1;"><span style="opacity: 0.8;">📍 المحل:</span> <strong>${location}</strong></div>` : ''}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stats" style="margin-bottom: 30px;">
+                    <div class="glass stat-card" style="box-shadow: 0 8px 32px rgba(102, 126, 234, 0.2);">
+                        <h3 style="font-size: 13px; margin: 0 0 10px 0;">📊 الاشتراكات</h3>
+                        <div class="number" style="font-size: 36px; color: #667eea; margin: 0;">${totalSubscriptions}</div>
+                    </div>
+                    <div class="glass stat-card" style="box-shadow: 0 8px 32px rgba(102, 126, 234, 0.2);">
+                        <h3 style="font-size: 13px; margin: 0 0 10px 0;">💰 الإيرادات الكلية</h3>
+                        <div class="number" style="font-size: 36px; color: #2ecc71; margin: 0;">₪ ${totalRevenue.toLocaleString('ar-EG')}</div>
+                    </div>
+                    <div class="glass stat-card" style="box-shadow: 0 8px 32px rgba(102, 126, 234, 0.2);">
+                        <h3 style="font-size: 13px; margin: 0 0 10px 0;">📈 المتوسط لكل اشتراك</h3>
+                        <div class="number" style="font-size: 36px; color: #f39c12; margin: 0;">₪ ${averagePerSubscription}</div>
+                    </div>
+                </div>
+
+                ${location ? generateDetailedTable(location, filteredSubs) : generateAllLocationsDetailed(groupByLocation)}
+            `;
+
+            document.getElementById('reportContent').innerHTML = reportHTML;
+            convertEmojisToSVG();
+        }
+
+        // جدول مفصل لمحل واحد
+        function generateDetailedTable(locationName, data) {
+            if (data.length === 0) {
+                return `<div style="text-align: center; padding: 40px; color: rgba(255, 255, 255, 0.5);">
+                    <h3>لا توجد بيانات لهذه الفترة</h3>
+                </div>`;
+            }
+
+            let html = `
+                <div style="margin-bottom: 30px;">
+                    <h3 style="margin-bottom: 20px; font-size: 18px; padding-bottom: 10px; border-bottom: 2px solid rgba(102, 126, 234, 0.3);">🏢 سجل ${locationName}</h3>
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: rgba(102, 126, 234, 0.25); border-bottom: 2px solid rgba(102, 126, 234, 0.5);">
+                                    <th style="padding: 15px; text-align: right; font-weight: bold;">📅 التاريخ</th>
+                                    <th style="padding: 15px; text-align: right; font-weight: bold;">👤 الاسم</th>
+                                    <th style="padding: 15px; text-align: right; font-weight: bold;">📱 الأرقام</th>
+                                    <th style="padding: 15px; text-align: right; font-weight: bold;">📆 الأشهر</th>
+                                    <th style="padding: 15px; text-align: right; font-weight: bold;">💵 المبلغ</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${data.map((sub, idx) => `
+                                    <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.1); background: ${idx % 2 === 0 ? 'rgba(102, 126, 234, 0.05)' : 'transparent'};">
+                                        <td style="padding: 14px; text-align: right;">${sub.date}</td>
+                                        <td style="padding: 14px; text-align: right; font-weight: 500;">${sub.name}</td>
+                                        <td style="padding: 14px; text-align: right;">${sub.phoneMode === 'write' ? sub.phone : `${sub.phone} + ${sub.phoneCount}`}</td>
+                                        <td style="padding: 14px; text-align: right;">${sub.months || 1}</td>
+                                        <td style="padding: 14px; text-align: right; color: #2ecc71; font-weight: bold;">${sub.totalPrice || sub.amount}₪</td>
+                                    </tr>
+                                `).join('')}
+                                <tr style="background: rgba(102, 126, 234, 0.15); border-top: 2px solid rgba(102, 126, 234, 0.3); font-weight: bold;">
+                                    <td colspan="4" style="padding: 15px; text-align: right;">الإجمالي:</td>
+                                    <td style="padding: 15px; text-align: right; color: #2ecc71; font-size: 16px;">₪ ${data.reduce((sum, sub) => sum + (sub.totalPrice || sub.amount), 0).toLocaleString('ar-EG')}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+            return html;
+        }
+
+        // تقرير جميع المحلات مفصل
+        function generateAllLocationsDetailed(groupByLocation) {
+            let html = '';
+            
+            Object.keys(groupByLocation).sort().forEach(location => {
+                html += generateDetailedTable(location, groupByLocation[location]);
+            });
+
+            return html || `<div style="text-align: center; padding: 40px; color: rgba(255, 255, 255, 0.5);">
+                <h3>لا توجد بيانات لهذه الفترة</h3>
+            </div>`;
+        }
+
+        // تحديث خيارات المحلات في select
+        function updateLocationOptions() {
+            const locations = getLocations();
+            const select = document.getElementById('reportLocation');
+            
+            if (select) {
+                // احفظ القيمة الحالية
+                const currentValue = select.value;
+                
+                // احذف الخيارات القديمة ما عدا "جميع المحلات"
+                while (select.options.length > 1) {
+                    select.remove(1);
+                }
+                
+                // أضف الخيارات الجديدة من الإعدادات
+                const option1 = document.createElement('option');
+                option1.value = locations.location1.name;
+                option1.textContent = locations.location1.name;
+                select.appendChild(option1);
+                
+                const option2 = document.createElement('option');
+                option2.value = locations.location2.name;
+                option2.textContent = locations.location2.name;
+                select.appendChild(option2);
+                
+                // استعد القيمة السابقة إن أمكن
+                select.value = currentValue;
+            }
+        }
+
+        // دوال الأمان والحماية والتخزين
+
+        // تحديث سجل الأنشطة
+        function addSecurityLog(message) {
+            const logs = JSON.parse(localStorage.getItem('securityLogs') || '[]');
+            const timestamp = new Date().toLocaleString('ar-EG');
+            logs.unshift({ message, timestamp });
+            
+            // احفظ آخر 100 سجل فقط
+            if (logs.length > 100) {
+                logs.pop();
+            }
+            localStorage.setItem('securityLogs', JSON.stringify(logs));
+            pushToFirebase();
+            updateSecurityLog();
+        }
+
+        // عرض سجل الأنشطة
+        function updateSecurityLog() {
+            const logs = JSON.parse(localStorage.getItem('securityLogs') || '[]');
+            const logDiv = document.getElementById('securityLog');
+            
+            if (!logDiv) return;
+
+            if (logs.length === 0) {
+                logDiv.innerHTML = '<div style="text-align: center; opacity: 0.5;">لا توجد أنشطة مسجلة</div>';
+                return;
+            }
+
+            logDiv.innerHTML = logs.map((log, idx) => `
+                <div style="padding: 8px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.1); ${idx % 2 === 0 ? 'background: rgba(102, 126, 234, 0.05)' : ''}">
+                    <div style="color: #667eea; font-weight: bold;">⏰ ${log.timestamp}</div>
+                    <div style="margin-top: 4px;">📌 ${log.message}</div>
+                </div>
+            `).join('');
+            
+            convertEmojisToSVG();
+        }
+
+        // إنشاء نسخة احتياطية
+        function createBackup() {
+            const { users, subscribers, subscriptions, settings } = loadData();
+            const backup = {
+                users, subscribers, subscriptions, settings,
+                backupDate: new Date().toLocaleString('ar-EG'),
+                version: '1.0'
+            };
+
+            const dataStr = JSON.stringify(backup, null, 2);
+            const dataBlob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `backup-${new Date().getTime()}.json`;
+            link.click();
+
+            addSecurityLog('✅ تم إنشاء نسخة احتياطية بنجاح');
+            document.getElementById('backupStatus').innerHTML = '✅ تم إنشاء النسخة بنجاح!';
+            setTimeout(() => {
+                document.getElementById('backupStatus').innerHTML = '';
+            }, 3000);
+        }
+
+        // تصدير البيانات JSON
+        function exportDataJSON() {
+            const { users, subscribers, subscriptions, settings } = loadData();
+            const data = { users, subscribers, subscriptions, settings };
+            
+            const dataStr = JSON.stringify(data, null, 2);
+            const dataBlob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `data-export-${new Date().getTime()}.json`;
+            link.click();
+
+            addSecurityLog('📥 تم تصدير البيانات بصيغة JSON');
+        }
+
+        // تصدير البيانات CSV
+        function exportDataCSV() {
+            const { subscriptions } = loadData();
+            let csv = 'التاريخ,المحل,الاسم,الأرقام,الأشهر,المبلغ\n';
+            
+            subscriptions.forEach(sub => {
+                const phones = sub.phoneMode === 'write' ? sub.phone : `${sub.phone}+${sub.phoneCount}`;
+                csv += `"${sub.date}","${sub.location}","${sub.name}","${phones}","${sub.months || 1}","${sub.totalPrice || sub.amount}"\n`;
+            });
+
+            const dataBlob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `subscriptions-${new Date().getTime()}.csv`;
+            link.click();
+
+            addSecurityLog('📥 تم تصدير البيانات بصيغة CSV');
+        }
+
+        // استيراد البيانات
+        document.addEventListener('DOMContentLoaded', () => {
+            const importFile = document.getElementById('importFile');
+            if (importFile) {
+                importFile.addEventListener('change', function(e) {
+                    const file = e.target.files[0];
+                    if (!file) return;
+
+                    const reader = new FileReader();
+                    reader.onload = function(event) {
+                        try {
+                            const importedData = JSON.parse(event.target.result);
+                            
+                            if (!confirm('هل أنت متأكد من استيراد البيانات؟ سيتم استبدال جميع البيانات الحالية!')) {
+                                return;
+                            }
+
+                            const currentSettings = JSON.parse(localStorage.getItem('settings') || '{}');
+                            saveData({
+                                users: importedData.users || [],
+                                subscribers: importedData.subscribers || [],
+                                subscriptions: importedData.subscriptions || [],
+                                settings: currentSettings
+                            });
+
+                            addSecurityLog('✅ تم استيراد البيانات بنجاح');
+                            document.getElementById('importStatus').innerHTML = '✅ تم الاستيراد بنجاح!';
+                            setTimeout(() => {
+                                location.reload();
+                            }, 2000);
+                        } catch (err) {
+                            addSecurityLog('❌ فشل استيراد البيانات - ملف غير صحيح');
+                            alert('خطأ: الملف غير صحيح أو تالف');
+                        }
+                    };
+                    reader.readAsText(file);
+                });
+            }
+            
+            // استبدال الايموجيات بـ SVG عند التحميل
+        });
+
+        // قفل/فتح الموقع
+        let siteLocked = localStorage.getItem('siteLocked') === 'true';
+        let siteLockPin = localStorage.getItem('siteLockPin') || '1234';
+
+        function toggleSiteLock() {
+            if (siteLocked) {
+                const pin = prompt('أدخل رمز PIN لفتح الموقع:');
+                if (pin === siteLockPin) {
+                    siteLocked = false;
+                    localStorage.setItem('siteLocked', 'false');
+                    addSecurityLog('🔓 تم فتح الموقع');
+                    alert('تم فتح الموقع بنجاح');
+                    updateLockButton();
+                } else {
+                    addSecurityLog('❌ محاولة فتح الموقع برمز خاطئ');
+                    alert('رمز PIN غير صحيح');
+                }
+            } else {
+                const newPin = prompt('أدخل رمز PIN جديد (4 أرقام على الأقل):');
+                if (newPin && newPin.length >= 4) {
+                    siteLockPin = newPin;
+                    siteLocked = true;
+                    localStorage.setItem('siteLocked', 'true');
+                    localStorage.setItem('siteLockPin', newPin);
+                    addSecurityLog('🔒 تم قفل الموقع برمز جديد');
+                    alert('تم قفل الموقع بنجاح برمز: ' + newPin);
+                    updateLockButton();
+                }
+            }
+        }
+
+        function updateLockButton() {
+            const lockBtn = document.getElementById('lockBtn');
+            if (lockBtn) {
+                if (siteLocked) {
+                    lockBtn.textContent = '🔓 فتح الموقع';
+                    lockBtn.style.background = 'linear-gradient(135deg, #2ecc71 0%, #27ae60 100%)';
+                } else {
+                    lockBtn.textContent = '🔒 قفل الموقع';
+                    lockBtn.style.background = 'linear-gradient(135deg, #e74c3c 0%, #c0392b 100%)';
+                }
+            }
+        }
+
+        // تغيير كلمة المرور الرئيسية
+        function changeAdminPassword() {
+            if (currentUser !== ADMIN_USERNAME) {
+                alert('فقط المسؤول يمكنه تغيير كلمة المرور الرئيسية');
+                return;
+            }
+
+            const oldPassword = prompt('أدخل كلمة المرور الحالية:');
+            if (oldPassword !== ADMIN_PASSWORD) {
+                addSecurityLog('❌ محاولة تغيير كلمة المرور برمز خاطئ');
+                alert('كلمة المرور الحالية غير صحيحة');
+                return;
+            }
+
+            const newPassword = prompt('أدخل كلمة المرور الجديدة:');
+            if (!newPassword || newPassword.length < 4) {
+                alert('كلمة المرور يجب أن تكون 4 أحرف على الأقل');
+                return;
+            }
+
+            const confirmPwd = prompt('أعد إدخال كلمة المرور:');
+            if (confirmPwd !== newPassword) {
+                alert('كلمات المرور غير متطابقة');
+                return;
+            }
+
+            const key = btoa('adminPassword');
+            localStorage.setItem(key, btoa(newPassword));
+            pushToFirebase();
+            addSecurityLog('✅ تم تغيير كلمة المرور الرئيسية');
+            alert('تم تغيير كلمة المرور بنجاح');
+        }
+
+        // حذف البيانات بأمان
+        function secureDelete() {
+            if (!confirm('تحذير: هذه العملية ستحذف جميع البيانات نهائياً!\nهل أنت متأكد تماماً؟')) {
+                return;
+            }
+
+            const confirmDelete = prompt('اكتب كلمة "حذف" للتأكيد:');
+            if (confirmDelete !== 'حذف') {
+                alert('تم إلغاء العملية');
+                return;
+            }
+
+            localStorage.clear();
+            addSecurityLog('⚠️ تم حذف جميع البيانات');
+            alert('تم حذف جميع البيانات بنجاح');
+            location.reload();
+        }
+
+        // تحديث عرض/إخفاء الأقسام
+        function showSection(section) {
+            document.querySelectorAll('.table-container, .add-user-form').forEach(el => {
+                el.classList.remove('active');
+            });
+            document.getElementById('homeSection').style.display = section === 'home' ? 'block' : 'none';
+            
+            if (section === 'subscribers') {
+                document.getElementById('subscribersSection').classList.add('active');
+            } else if (section === 'subscriptions') {
+                document.getElementById('subscriptionsSection').classList.add('active');
+            } else if (section === 'reports') {
+                updateLocationOptions();
+                generateReport();
+                document.getElementById('reportsSection').classList.add('active');
+            } else if (section === 'security') {
+                updateSecurityLog();
+                updateLockButton();
+                document.getElementById('securitySection').classList.add('active');
+            } else if (section === 'users') {
+                document.getElementById('usersSection').classList.add('active');
+            } else if (section === 'settings') {
+                loadSettingsForm();
+                document.getElementById('settingsSection').classList.add('active');
+            }
+
+            // تحديث الأزرار الملونة
+            document.querySelectorAll('.navbar button').forEach(btn => {
+                btn.classList.remove('active');
+                if (section === 'home' && btn.textContent.includes('🏠')) {
+                    btn.classList.add('active');
+                } else if (section === 'subscribers' && btn.textContent.includes('👤')) {
+                    btn.classList.add('active');
+                } else if (section === 'subscriptions' && btn.textContent.includes('📋')) {
+                    btn.classList.add('active');
+                } else if (section === 'reports' && btn.textContent.includes('📊')) {
+                    btn.classList.add('active');
+                } else if (section === 'security' && btn.textContent.includes('🔒')) {
+                    btn.classList.add('active');
+                } else if (section === 'users' && btn.textContent.includes('👥')) {
+                    btn.classList.add('active');
+                } else if (section === 'settings' && btn.textContent.includes('⚙️')) {
+                    btn.classList.add('active');
+                }
+            });
+            
+            // تحديث الايقونات
+            setTimeout(() => {
+                convertEmojisToSVG();
+            }, 50);
+        }
+
+        // تحميل نموذج الإعدادات
+        function loadSettingsForm() {
+            const locations = getLocations();
+            document.getElementById('location1Name').value = locations.location1.name;
+            document.getElementById('location1Price').value = locations.location1.price;
+            document.getElementById('location2Name').value = locations.location2.name;
+            document.getElementById('location2Price').value = locations.location2.price;
+        }
+
+        // حفظ الإعدادات
+        function saveSettings() {
+            const location1Name = document.getElementById('location1Name').value;
+            const location1Price = parseInt(document.getElementById('location1Price').value);
+            const location2Name = document.getElementById('location2Name').value;
+            const location2Price = parseInt(document.getElementById('location2Price').value);
+            const alert = document.getElementById('alertSettings');
+
+            if (!location1Name || !location2Name || !location1Price || !location2Price) {
+                showAlert(alert, 'يرجى ملء جميع الحقول', 'error');
+                return;
+            }
+
+            const { users, subscribers, subscriptions } = loadData();
+            const settings = {
+                location1: { name: location1Name, price: location1Price },
+                location2: { name: location2Name, price: location2Price }
+            };
+
+            saveData({ users, subscribers, subscriptions, settings });
+            showAlert(alert, 'تم حفظ الإعدادات بنجاح ✓', 'success');
+            
+            setTimeout(() => {
+                updateHomeLocations();
+            }, 1000);
+        }
+
+        // إعادة تعيين الإعدادات
+        function resetSettings() {
+            if (!confirm('هل تريد إعادة تعيين الإعدادات إلى الافتراضية؟')) return;
+            
+            const { users, subscribers, subscriptions } = loadData();
+            saveData({ users, subscribers, subscriptions, settings: {} });
+            loadSettingsForm();
+            
+            const alert = document.getElementById('alertSettings');
+            showAlert(alert, 'تم إعادة تعيين الإعدادات ✓', 'success');
+            
+            setTimeout(() => {
+                updateHomeLocations();
+            }, 1000);
+        }
+
+        // تحديث الواجهة الرئيسية بأسماء المحلات الجديدة
+        function updateHomeLocations() {
+            const locations = getLocations();
+            const cards = document.querySelectorAll('.subscription-card');
+            
+            if (cards.length >= 2) {
+                cards[0].querySelector('h2').textContent = locations.location1.name;
+                cards[0].querySelector('.price').textContent = locations.location1.price + '₪';
+                cards[0].querySelector('button').onclick = () => openPaymentModal(locations.location1.name, locations.location1.price);
+                
+                cards[1].querySelector('h2').textContent = locations.location2.name;
+                cards[1].querySelector('.price').textContent = locations.location2.price + '₪';
+                cards[1].querySelector('button').onclick = () => openPaymentModal(locations.location2.name, locations.location2.price);
+            }
+
+            // تحديث الإيرادات بأسماء المحلات الجديدة
+            updateStats();
+        }
+
+        // حساب السعر حسب عدد الأرقام (5 فما فوق = 55)
+        function calculatePriceByQuantity(mode) {
+            let phoneCount = 0;
+            
+            if (mode === 'mixed') {
+                phoneCount = parseInt(document.getElementById('phoneCountMixed').value) || 1;
+            }
+
+            // حساب السعر الجديد
+            let newPrice = currentSubscription.price; // السعر الأساسي
+            if (phoneCount >= 5) {
+                newPrice = 55; // السعر الجديد عند 5 أرقام فما فوق
+            }
+
+            document.getElementById('pricePerItem').value = newPrice;
+            calculateTotalPrice();
+        }
+
+        // حساب المبلغ الكلي
+        function calculateTotalPrice() {
+            const totalPriceDisplay = document.getElementById('totalPriceDisplay');
+            const totalPriceInput = document.getElementById('totalPrice');
+
+            if (phoneMode === 'mixed') {
+                const pricePerItem = parseInt(document.getElementById('pricePerItem').value) || 0;
+                const phoneCountMixed = parseInt(document.getElementById('phoneCountMixed').value) || 1;
+                
+                if (pricePerItem > 0 && phoneCountMixed > 0) {
+                    const totalPrice = pricePerItem * phoneCountMixed;
+                    totalPriceInput.value = totalPrice + ' ₪';
+                    totalPriceDisplay.style.display = 'block';
+                } else {
+                    totalPriceDisplay.style.display = 'none';
+                }
+            } else {
+                totalPriceDisplay.style.display = 'none';
+            }
+        }
+
+        // تبديل نمط إدخال الأرقام
+        function togglePhoneMode(mode) {
+            phoneMode = mode;
+            document.querySelectorAll('.toggle-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // إخفاء جميع الحقول
+            document.getElementById('phoneWriteField').classList.add('hidden-field');
+            document.getElementById('phoneMixedField').classList.add('hidden-field');
+            document.getElementById('pricePerItemField').style.display = 'none';
+            document.getElementById('totalPriceDisplay').style.display = 'none';
+
+            // إظهار الحقول المناسبة
+            if (mode === 'write') {
+                document.getElementById('phoneWriteField').classList.remove('hidden-field');
+            } else if (mode === 'mixed') {
+                document.getElementById('phoneMixedField').classList.remove('hidden-field');
+                document.getElementById('pricePerItemField').style.display = 'block';
+                calculatePriceByQuantity('mixed');
+            }
+        }
+
+        // نافذة الدفع
+        function openPaymentModal(name, price) {
+            currentSubscription = { name, price };
+            document.getElementById('modalTitle').textContent = `الاشتراك في ${name}`;
+            document.getElementById('subscriberName').value = '';
+            document.getElementById('subscriberPhone').value = '';
+            document.getElementById('subscriberPhoneMixed').value = '';
+            document.getElementById('phoneCountMixed').value = '1';
+            document.getElementById('months').value = '1';
+            document.getElementById('pricePerItem').value = price;
+            document.getElementById('alertModal').innerHTML = '';
+            document.getElementById('totalPriceDisplay').style.display = 'none';
+            
+            // إعادة تعيين نمط الأرقام
+            phoneMode = 'write';
+            document.querySelectorAll('.toggle-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.toggle-btn')[0].classList.add('active');
+            document.getElementById('phoneWriteField').classList.remove('hidden-field');
+            document.getElementById('phoneMixedField').classList.add('hidden-field');
+            document.getElementById('pricePerItemField').style.display = 'none';
+            
+            document.getElementById('paymentModal').classList.add('active');
+            
+            // ربط معالجات Enter عند فتح الـ modal
+            setTimeout(() => {
+                attachEnterKeyHandlers();
+                // تركيز على الـ subscriberName input
+                document.getElementById('subscriberName').focus();
+            }, 50);
+        }
+
+        function closePaymentModal() {
+            document.getElementById('paymentModal').classList.remove('active');
+        }
+
+        // معالجة الدفع
+        function processPayment() {
+            const name = document.getElementById('subscriberName').value;
+            const months = parseInt(document.getElementById('months').value) || 1;
+            const alert = document.getElementById('alertModal');
+
+            let phone = '';
+            let phoneCount = 1;
+            let pricePerItem = currentSubscription.price;
+            let totalPrice = currentSubscription.price;
+
+            if (!name) {
+                showAlert(alert, 'يرجى إدخال الاسم', 'error');
+                return;
+            }
+
+            if (phoneMode === 'write') {
+                phone = document.getElementById('subscriberPhone').value;
+                if (!phone) {
+                    showAlert(alert, 'يرجى إدخال رقم الهاتف', 'error');
+                    return;
+                }
+                if (!/^\d{9,10}$/.test(phone)) {
+                    showAlert(alert, 'رقم الهاتف غير صحيح (9-10 أرقام)', 'error');
+                    return;
+                }
+            } else if (phoneMode === 'mixed') {
+                phone = document.getElementById('subscriberPhoneMixed').value;
+                phoneCount = parseInt(document.getElementById('phoneCountMixed').value) || 1;
+                pricePerItem = parseInt(document.getElementById('pricePerItem').value) || 0;
+                
+                if (!phone) {
+                    showAlert(alert, 'يرجى إدخال رقم الهاتف', 'error');
+                    return;
+                }
+                if (!/^\d{9,10}$/.test(phone)) {
+                    showAlert(alert, 'رقم الهاتف غير صحيح (9-10 أرقام)', 'error');
+                    return;
+                }
+                if (phoneCount < 1) {
+                    showAlert(alert, 'يرجى إدخال عدد صحيح', 'error');
+                    return;
+                }
+                if (pricePerItem <= 0) {
+                    showAlert(alert, 'يرجى إدخال السعر لكل رقم', 'error');
+                    return;
+                }
+                
+                totalPrice = pricePerItem * phoneCount;
+            }
+
+            if (months < 1) {
+                showAlert(alert, 'يرجى إدخال عدد أشهر صحيح', 'error');
+                return;
+            }
+
+            const { users, subscribers, subscriptions, settings } = loadData();
+
+            // التحقق من عدم تكرار الرقم (فقط إذا كان رقم هاتف فعلي)
+            if ((phoneMode === 'write' || phoneMode === 'mixed') && subscribers.some(s => typeof s.phone === 'string' && s.phone === phone)) {
+                showAlert(alert, 'هذا الرقم مسجل بالفعل', 'error');
+                return;
+            }
+
+            // إضافة المشترك
+            subscribers.push({ name, phone, phoneMode, phoneCount });
+
+            // إضافة الاشتراك للسجل
+            subscriptions.push({
+                name,
+                phone,
+                phoneMode,
+                phoneCount,
+                location: currentSubscription.name,
+                amount: currentSubscription.price,
+                totalPrice,
+                pricePerItem,
+                months,
+                date: new Date().toLocaleDateString('ar-EG')
+            });
+
+            saveData({ users, subscribers, subscriptions, settings });
+            addSecurityLog(`💰 تم تسجيل اشتراك جديد: ${name} - ${currentSubscription.name} - ${totalPrice}₪`);
+            showAlert(alert, 'تم تسجيل الاشتراك بنجاح ✓', 'success');
+            
+            setTimeout(() => {
+                closePaymentModal();
+                updateUI();
+            }, 1500);
+        }
+
+        // إضافة مستخدم جديد
+        function addNewUser() {
+            const username = document.getElementById('newUsername').value;
+            const password = document.getElementById('newPassword').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+            const alert = document.getElementById('alertUsers');
+
+            if (!username || !password || !confirmPassword) {
+                showAlert(alert, 'يرجى ملء جميع الحقول', 'error');
+                return;
+            }
+
+            if (password !== confirmPassword) {
+                showAlert(alert, 'كلمات المرور غير متطابقة', 'error');
+                return;
+            }
+
+            if (password.length < 4) {
+                showAlert(alert, 'كلمة المرور يجب أن تكون 4 أحرف على الأقل', 'error');
+                return;
+            }
+
+            const { users, subscribers, subscriptions, settings } = loadData();
+
+            if (users.some(u => u.username === username) || username === ADMIN_USERNAME) {
+                showAlert(alert, 'اسم المستخدم موجود بالفعل', 'error');
+                return;
+            }
+
+            users.push({ username, password });
+            saveData({ users, subscribers, subscriptions, settings });
+            
+            showAlert(alert, 'تم إضافة المستخدم بنجاح ✓', 'success');
+            document.getElementById('newUsername').value = '';
+            document.getElementById('newPassword').value = '';
+            document.getElementById('confirmPassword').value = '';
+            
+            updateUsersList();
+        }
+
+        // حذف مستخدم
+        function deleteUser(username) {
+            if (!confirm('هل تريد حذف هذا المستخدم؟')) return;
+
+            const { users, subscribers, subscriptions, settings } = loadData();
+            const filtered = users.filter(u => u.username !== username);
+            saveData({ users: filtered, subscribers, subscriptions, settings });
+            updateUI();
+        }
+
+        // حذف مشترك
+        function deleteSubscriber(phoneKey) {
+            if (!confirm('هل تريد حذف هذا المشترك؟')) return;
+
+            const { users, subscribers, subscriptions, settings } = loadData();
+            
+            const filtered = subscribers.filter(s => s.phone !== phoneKey);
+            const filteredSubs = subscriptions.filter(s => s.phone !== phoneKey);
+            
+            saveData({ users, subscribers: filtered, subscriptions: filteredSubs, settings });
+            updateUI();
+        }
+
+        // حذف اشتراك
+        function deleteSubscription(index) {
+            if (!confirm('هل تريد حذف هذا الاشتراك؟')) return;
+
+            const { users, subscribers, subscriptions, settings } = loadData();
+            const deletedSub = subscriptions[index];
+            addSecurityLog(`🗑️ تم حذف اشتراك: ${deletedSub.name} - ${deletedSub.location} - ${deletedSub.totalPrice || deletedSub.amount}₪`);
+            subscriptions.splice(index, 1);
+            saveData({ users, subscribers, subscriptions, settings });
+            updateUI();
+        }
+
+        // تحديث قائمة المستخدمين
+        function updateUsersList() {
+            const { users } = loadData();
+            const tbody = document.getElementById('usersTable');
+            
+            if (users.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="2" style="text-align: center;">لا توجد بيانات</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = users.map(user => `
+                <tr>
+                    <td>${user.username}</td>
+                    <td>
+                        <button class="delete-btn" onclick="deleteUserDirect('${user.username}')">حذف</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // تحديث قائمة المشتركين
+        function updateSubscribersList() {
+            const { subscribers } = loadData();
+            const tbody = document.getElementById('subscribersTable');
+            
+            if (subscribers.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" style="text-align: center;">لا توجد بيانات</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = subscribers.map((sub, idx) => {
+                let phoneDisplay = '';
+                
+                if (sub.phoneMode === 'write') {
+                    phoneDisplay = sub.phone;
+                } else if (sub.phoneMode === 'mixed') {
+                    phoneDisplay = `${sub.phone} + ${sub.phoneCount} أرقام`;
+                }
+                
+                return `
+                    <tr>
+                        <td>${phoneDisplay}</td>
+                        <td>${sub.name}</td>
+                        <td>
+                            <button class="delete-btn" onclick="deleteSubscriberDirect('${sub.phone}')">حذف</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // دوال الحذف المباشرة
+        function deleteSubscriptionDirect(index) {
+            if (!confirm('هل تريد حذف هذا الاشتراك؟')) return;
+            
+            const { users, subscribers, subscriptions, settings } = loadData();
+            if (subscriptions[index]) {
+                const sub = subscriptions[index];
+                subscriptions.splice(index, 1);
+                saveData({ users, subscribers, subscriptions, settings });
+                addSecurityLog(`🗑️ حذف اشتراك: ${sub.name} - ${sub.amount}₪`);
+                updateSubscriptionsList();
+                updateStats();
+            }
+        }
+
+        function deleteSubscriberDirect(phone) {
+            if (!confirm('هل تريد حذف المشترك وجميع اشتراكاته؟')) return;
+            
+            const { users, subscribers, subscriptions, settings } = loadData();
+            const newSubscribers = subscribers.filter(s => s.phone !== phone);
+            const newSubscriptions = subscriptions.filter(s => s.phone !== phone);
+            saveData({ users, subscribers: newSubscribers, subscriptions: newSubscriptions, settings });
+            addSecurityLog(`🗑️ حذف مشترك: ${phone}`);
+            updateSubscribersList();
+            updateSubscriptionsList();
+            updateStats();
+        }
+
+        function deleteUserDirect(username) {
+            if (!confirm('هل تريد حذف هذا المستخدم؟')) return;
+            
+            const { users, subscribers, subscriptions, settings } = loadData();
+            const newUsers = users.filter(u => u.username !== username);
+            saveData({ users: newUsers, subscribers, subscriptions, settings });
+            addSecurityLog(`🗑️ حذف مستخدم: ${username}`);
+            updateUsersList();
+        }
+
+        // نظام حذف محسّن
+        let deleteHandlersAttached = false;
+
+        function attachDeleteHandlers() {
+            // لا نحتاج هذه الدالة - نستخدم onclick مباشر على الأزرار
+        }
+
+        // نظام مفتاح Enter الشامل
+        function attachEnterKeyHandlers() {
+            // تسجيل الدخول
+            const loginUsername = document.getElementById('loginUsername');
+            const loginPassword = document.getElementById('loginPassword');
+            if (loginUsername) {
+                loginUsername.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') handleLogin();
+                });
+            }
+            if (loginPassword) {
+                loginPassword.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') handleLogin();
+                });
+            }
+
+            // إضافة المشترك
+            const subscriberName = document.getElementById('subscriberName');
+            const subscriberPhone = document.getElementById('subscriberPhone');
+            const subscriberPhoneMixed = document.getElementById('subscriberPhoneMixed');
+            const phoneCountMixed = document.getElementById('phoneCountMixed');
+            const months = document.getElementById('months');
+            const pricePerItem = document.getElementById('pricePerItem');
+
+            if (subscriberName) {
+                subscriberName.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') subscriberPhone?.focus();
+                });
+            }
+            if (subscriberPhone) {
+                subscriberPhone.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        const phoneMode = document.querySelector('input[name="phoneMode"]:checked')?.value;
+                        if (phoneMode === 'write') {
+                            months?.focus();
+                        } else {
+                            subscriberPhoneMixed?.focus();
+                        }
+                    }
+                });
+            }
+            if (subscriberPhoneMixed) {
+                subscriberPhoneMixed.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') phoneCountMixed?.focus();
+                });
+            }
+            if (phoneCountMixed) {
+                phoneCountMixed.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') months?.focus();
+                });
+            }
+            if (months) {
+                months.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') pricePerItem?.focus();
+                });
+            }
+            if (pricePerItem) {
+                pricePerItem.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        processPayment();
+                    }
+                });
+            }
+
+            // معالج عام على جميع inputs في modal للدفع عند آخر input
+            const paymentModal = document.getElementById('paymentModal');
+            if (paymentModal && paymentModal.style.display !== 'none') {
+                const inputs = paymentModal.querySelectorAll('input[type="text"], input[type="number"]');
+                if (inputs.length > 0) {
+                    const lastInput = inputs[inputs.length - 1];
+                    lastInput.addEventListener('keypress', (e) => {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            processPayment();
+                        }
+                    });
+                }
+            }
+
+            // إضافة مستخدم
+            const newUsername = document.getElementById('newUsername');
+            const newPassword = document.getElementById('newPassword');
+            const confirmPassword = document.getElementById('confirmPassword');
+
+            if (newUsername) {
+                newUsername.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') newPassword?.focus();
+                });
+            }
+            if (newPassword) {
+                newPassword.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') confirmPassword?.focus();
+                });
+            }
+            if (confirmPassword) {
+                confirmPassword.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        const btn = document.querySelector('[onclick="addNewUser()"]');
+                        if (btn) btn.click();
+                    }
+                });
+            }
+
+            // إعدادات المحلات
+            const location1Name = document.getElementById('location1Name');
+            const location1Price = document.getElementById('location1Price');
+            const location2Name = document.getElementById('location2Name');
+            const location2Price = document.getElementById('location2Price');
+
+            if (location1Name) {
+                location1Name.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') location1Price?.focus();
+                });
+            }
+            if (location1Price) {
+                location1Price.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') location2Name?.focus();
+                });
+            }
+            if (location2Name) {
+                location2Name.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') location2Price?.focus();
+                });
+            }
+            if (location2Price) {
+                location2Price.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        const btn = document.querySelector('[onclick="saveSettings()"]');
+                        if (btn) btn.click();
+                    }
+                });
+            }
+
+            // معالجات Enter لأزرار الدفع في الـ modal
+            const paymentBtn = document.querySelector('[onclick="processPayment()"]');
+            if (paymentBtn) {
+                paymentBtn.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') processPayment();
+                });
+            }
+
+            // معالج Enter لزر الحذف الآمن
+            const deleteBtn = document.querySelector('[onclick="secureDelete()"]');
+            if (deleteBtn) {
+                deleteBtn.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        secureDelete();
+                    }
+                });
+            }
+
+            // معالجات Enter لأزرار الحفظ والإضافة المهمة
+            document.querySelectorAll('[onclick*="saveSettings"], [onclick*="addNewUser"], [onclick*="processPayment"]').forEach(btn => {
+                btn.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        btn.click();
+                    }
+                });
+            });
+        }
+
+        // تحديث سجل الاشتراكات
+        function updateSubscriptionsList() {
+            const { subscriptions } = loadData();
+            const tbody = document.getElementById('subscriptionsTable');
+            
+            if (subscriptions.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" style="text-align: center;">لا توجد بيانات</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = subscriptions.map((sub, index) => {
+                let phoneDisplay = '';
+                
+                if (sub.phoneMode === 'write') {
+                    phoneDisplay = sub.phone;
+                } else if (sub.phoneMode === 'mixed') {
+                    phoneDisplay = `${sub.phone} + ${sub.phoneCount}`;
+                }
+                
+                const totalPrice = sub.totalPrice || sub.amount;
+                const pricePerItem = sub.pricePerItem || sub.amount;
+                
+                return `
+                    <tr>
+                        <td>${sub.date}</td>
+                        <td>${sub.location}</td>
+                        <td>${sub.name}</td>
+                        <td>${phoneDisplay}</td>
+                        <td>${sub.months || 1}</td>
+                        <td>${totalPrice}₪</td>
+                        <td>${pricePerItem}₪</td>
+                        <td>${sub.amount}₪</td>
+                        <td>
+                            <button class="delete-btn" onclick="deleteSubscriptionDirect(${index})">حذف</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // تحديث الإحصائيات
+        function updateStats() {
+            const { subscribers, subscriptions } = loadData();
+            const locations = getLocations();
+            
+            document.getElementById('totalSubscribers').textContent = subscribers.length;
+            document.getElementById('totalSubscriptions').textContent = subscriptions.length;
+            
+            // حساب إيرادات كل محل
+            const location1Revenue = subscriptions
+                .filter(sub => sub.location === locations.location1.name)
+                .reduce((sum, sub) => sum + (sub.totalPrice || sub.amount), 0);
+            
+            const location2Revenue = subscriptions
+                .filter(sub => sub.location === locations.location2.name)
+                .reduce((sum, sub) => sum + (sub.totalPrice || sub.amount), 0);
+            
+            // تحديث العناوين والإيرادات
+            document.getElementById('location1Title').textContent = `🏠 ${locations.location1.name}`;
+            document.getElementById('location2Title').textContent = `🏞️ ${locations.location2.name}`;
+            document.getElementById('location1Revenue').textContent = `₪ ${location1Revenue.toLocaleString('ar-EG')}`;
+            document.getElementById('location2Revenue').textContent = `₪ ${location2Revenue.toLocaleString('ar-EG')}`;
+        }
+
+        // تحديث واجهة المستخدم
+        function updateUI() {
+            updateStats();
+            updateSubscribersList();
+            updateSubscriptionsList();
+            updateUsersList();
+            updateHomeLocations();
+            
+            // تحديث الايقونات SVG والـ Enter handlers
+            setTimeout(() => {
+                convertEmojisToSVG();
+                attachEnterKeyHandlers();
+            }, 50);
+        }
+
+        // تهيئة المحلات
+        function initializeLocations() {
+            const locations = getLocations();
+            const cards = document.querySelectorAll('.subscription-card');
+            
+            if (cards.length >= 2) {
+                // المحل الأول
+                cards[0].querySelector('h2').textContent = locations.location1.name;
+                cards[0].querySelector('.price').textContent = locations.location1.price + '₪';
+                const btn1 = cards[0].querySelector('button');
+                btn1.onclick = function() {
+                    openPaymentModal(locations.location1.name, locations.location1.price);
+                };
+                
+                // المحل الثاني
+                cards[1].querySelector('h2').textContent = locations.location2.name;
+                cards[1].querySelector('.price').textContent = locations.location2.price + '₪';
+                const btn2 = cards[1].querySelector('button');
+                btn2.onclick = function() {
+                    openPaymentModal(locations.location2.name, locations.location2.price);
+                };
+            }
+        }
+
+        // عرض الرسائل
+        function showAlert(element, message, type) {
+            element.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
+            convertEmojisToSVG();
+            setTimeout(() => {
+                element.innerHTML = '';
+            }, 3000);
+        }
+
+        // إغلاق النافذة الحوارية
+        window.onclick = function(event) {
+            const modal = document.getElementById('paymentModal');
+            if (event.target === modal) {
+                closePaymentModal();
+            }
+        }
+
+        // تحميل البيانات الأولية
+        function initLocalOnly() {
+            const { users } = loadData();
+            if (users.length === 0) {
+                saveDataLocalOnly({ users: [{ username: 'user1', password: 'user1' }], subscribers: [], subscriptions: [], settings: {} });
+            }
+            siteLocked = localStorage.getItem('siteLocked') === 'true';
+            siteLockPin = localStorage.getItem('siteLockPin') || '1234';
+            attachDeleteHandlers();
+            attachEnterKeyHandlers();
+        }
+
+        window.addEventListener('load', () => {
+            // إذا فايربيز غير متاح (فشل تحميل المكتبة أو تعذرت التهيئة) نعمل محلياً فقط مباشرة
+            if (!firebaseAvailable || !dbRef) {
+                initLocalOnly();
+                return;
+            }
+
+            // الخطوة 1: اسحب البيانات الحالية من Firebase أولاً (مرة واحدة) قبل أي قرار
+            dbRef.once('value').then((snapshot) => {
+                const remoteData = snapshot.val();
+
+                isSyncingFromFirebase = true;
+                if (remoteData) {
+                    // يوجد بيانات على فايربيز (من جهاز آخر أو من قبل) - استخدمها هي
+                    localStorage.setItem('users', JSON.stringify(remoteData.users || []));
+                    localStorage.setItem('subscribers', JSON.stringify(remoteData.subscribers || []));
+                    localStorage.setItem('subscriptions', JSON.stringify(remoteData.subscriptions || []));
+                    localStorage.setItem('settings', JSON.stringify(remoteData.settings || {}));
+                    localStorage.setItem('securityLogs', JSON.stringify(remoteData.securityLogs || []));
+                    localStorage.setItem('siteLocked', remoteData.siteLocked || 'false');
+                    localStorage.setItem('siteLockPin', remoteData.siteLockPin || '');
+                    if (remoteData.adminPassword) localStorage.setItem(btoa('adminPassword'), remoteData.adminPassword);
+                } else {
+                    // لا يوجد أي بيانات على فايربيز إطلاقاً (أول مرة) - أنشئ مستخدم افتراضي وارفعه
+                    const defaultUsers = [{ username: 'user1', password: 'user1' }];
+                    localStorage.setItem('users', JSON.stringify(defaultUsers));
+                    localStorage.setItem('subscribers', JSON.stringify([]));
+                    localStorage.setItem('subscriptions', JSON.stringify([]));
+                    localStorage.setItem('settings', JSON.stringify({}));
+                }
+                isSyncingFromFirebase = false;
+
+                if (!remoteData) {
+                    // ارفع البيانات الافتراضية لأول مرة
+                    pushToFirebase();
+                }
+
+                // تحديث القفل ومتغيرات الحالة بعد سحب البيانات
+                siteLocked = localStorage.getItem('siteLocked') === 'true';
+                siteLockPin = localStorage.getItem('siteLockPin') || '1234';
+
+                // الخطوة 2: ابدأ الاستماع المستمر لأي تغيير من أجهزة أخرى بعد الآن
+                listenToFirebase();
+
+                // ربط معالجات الحذف والـ Enter
+                attachDeleteHandlers();
+                attachEnterKeyHandlers();
+            }).catch((error) => {
+                console.error('❌ تعذر الاتصال بفايربيز، سيتم العمل محلياً:', error);
+                initLocalOnly();
+            });
+        });
+
+        // حفظ محلي فقط بدون رفع لفايربيز (يُستخدم عند فشل الاتصال)
+        function saveDataLocalOnly(data) {
+            localStorage.setItem('users', JSON.stringify(data.users));
+            localStorage.setItem('subscribers', JSON.stringify(data.subscribers));
+            localStorage.setItem('subscriptions', JSON.stringify(data.subscriptions));
+            if (data.settings) localStorage.setItem('settings', JSON.stringify(data.settings));
+        }
+    </script>
+</body>
+</html>
