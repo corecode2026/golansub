@@ -73,6 +73,7 @@
                     subscriptions: JSON.parse(localStorage.getItem('subscriptions') || '[]'),
                     settings: JSON.parse(localStorage.getItem('settings') || '{}'),
                     securityLogs: JSON.parse(localStorage.getItem('securityLogs') || '[]'),
+                    insuranceSales: JSON.parse(localStorage.getItem('insuranceSales') || '[]'),
                     siteLocked: localStorage.getItem('siteLocked') || 'false',
                     siteLockPin: localStorage.getItem('siteLockPin') || '',
                     adminPassword: localStorage.getItem(btoa('adminPassword')) || ''
@@ -97,6 +98,7 @@
                 localStorage.setItem('subscriptions', JSON.stringify(data.subscriptions || []));
                 localStorage.setItem('settings', JSON.stringify(data.settings || {}));
                 localStorage.setItem('securityLogs', JSON.stringify(data.securityLogs || []));
+                localStorage.setItem('insuranceSales', JSON.stringify(data.insuranceSales || []));
                 localStorage.setItem('siteLocked', data.siteLocked || 'false');
                 localStorage.setItem('siteLockPin', data.siteLockPin || '');
                 if (data.adminPassword) localStorage.setItem(btoa('adminPassword'), data.adminPassword);
@@ -106,6 +108,7 @@
                     updateUI();
                     if (typeof updateSecurityLog === 'function') updateSecurityLog();
                     if (typeof updateLockButton === 'function') updateLockButton();
+                    if (typeof updateInsuranceList === 'function') updateInsuranceList();
                 }
 
                 isSyncingFromFirebase = false;
@@ -838,13 +841,14 @@
         </div>
 
         <div class="navbar">
-            <button class="active" onclick="showSection('home')">🏠 الرئيسية</button>
-            <button onclick="showSection('subscribers')">👤 المشتركين</button>
-            <button onclick="showSection('subscriptions')">📋 سجل الاشتراكات</button>
-            <button onclick="showSection('reports')" id="reportsBtn">📊 التقارير</button>
-            <button onclick="showSection('security')" id="securityBtn">🔒 الأمان والحماية</button>
-            <button onclick="showSection('users')" id="usersBtn">👥 إدارة المستخدمين</button>
-            <button onclick="showSection('settings')" id="settingsBtn">⚙️ الإعدادات</button>
+            <button class="active" data-section="home" onclick="showSection('home')">🏠 الرئيسية</button>
+            <button data-section="subscribers" onclick="showSection('subscribers')">👤 المشتركين</button>
+            <button data-section="subscriptions" onclick="showSection('subscriptions')">📋 سجل الاشتراكات</button>
+            <button data-section="insurance" onclick="showSection('insurance')" id="insuranceBtn">🛡️ التأمين</button>
+            <button data-section="reports" onclick="showSection('reports')" id="reportsBtn">📊 التقارير</button>
+            <button data-section="security" onclick="showSection('security')" id="securityBtn">🔒 الأمان والحماية</button>
+            <button data-section="users" onclick="showSection('users')" id="usersBtn">👥 إدارة المستخدمين</button>
+            <button data-section="settings" onclick="showSection('settings')" id="settingsBtn">⚙️ الإعدادات</button>
         </div>
 
         <div class="content">
@@ -929,6 +933,63 @@
                         <tr><td colspan="9" style="text-align: center;">لا توجد بيانات</td></tr>
                     </tbody>
                 </table>
+            </div>
+
+            <!-- التأمين (مستقل تماماً عن الاشتراكات والفواتير) -->
+            <div class="add-user-form glass" id="insuranceSection" style="max-width: 100%;">
+                <h2 style="text-align: center; margin-bottom: 25px; font-size: 24px;">🛡️ مبيعات التأمين</h2>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 20px;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>اسم التأمين</label>
+                        <input type="text" id="insuranceName" placeholder="مثال: تأمين شامل / طرف ثالث">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>اسم الزبون</label>
+                        <input type="text" id="insuranceCustomer" placeholder="اسم الزبون الكامل">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>الرقم</label>
+                        <input type="text" id="insurancePhone" placeholder="رقم الهاتف أو الهوية">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>المبلغ (₪)</label>
+                        <input type="number" id="insuranceAmount" placeholder="المبلغ بالشيكل" min="0">
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="addInsurance()" style="width: 100%; margin-bottom: 10px;">➕ إضافة عملية تأمين</button>
+                <div id="alertInsurance"></div>
+
+                <!-- تقارير التأمين المستقلة -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin: 25px 0;">
+                    <div class="glass stat-card">
+                        <h3 style="font-size: 13px;">🛡️ عدد العمليات</h3>
+                        <div class="number" id="insuranceCount" style="font-size: 28px; color: #667eea;">0</div>
+                    </div>
+                    <div class="glass stat-card">
+                        <h3 style="font-size: 13px;">💰 إجمالي مبيعات التأمين</h3>
+                        <div class="number" id="insuranceTotal" style="font-size: 28px; color: #2ecc71;">0₪</div>
+                    </div>
+                </div>
+
+                <h3 style="margin: 25px 0 15px 0; font-size: 17px;">سجل مبيعات التأمين</h3>
+                <div style="overflow-x: auto;">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>التاريخ</th>
+                                <th>اسم التأمين</th>
+                                <th>اسم الزبون</th>
+                                <th>الرقم</th>
+                                <th>المبلغ</th>
+                                <th>حذف</th>
+                            </tr>
+                        </thead>
+                        <tbody id="insuranceTable">
+                            <tr><td colspan="6" style="text-align: center;">لا توجد بيانات</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
             <!-- التقارير -->
@@ -1140,7 +1201,7 @@
 
             <div class="form-group">
                 <label>عدد الأشهر</label>
-                <input type="number" id="months" min="1" placeholder="كم شهر؟" value="1">
+                <input type="number" id="months" min="1" placeholder="كم شهر؟" value="1" oninput="calculateTotalPrice()">
             </div>
 
             <div class="form-group" id="pricePerItemField" style="display: none;">
@@ -1833,6 +1894,9 @@
                 document.getElementById('subscribersSection').classList.add('active');
             } else if (section === 'subscriptions') {
                 document.getElementById('subscriptionsSection').classList.add('active');
+            } else if (section === 'insurance') {
+                updateInsuranceList();
+                document.getElementById('insuranceSection').classList.add('active');
             } else if (section === 'reports') {
                 updateLocationOptions();
                 generateReport();
@@ -1848,24 +1912,9 @@
                 document.getElementById('settingsSection').classList.add('active');
             }
 
-            // تحديث الأزرار الملونة
+            // تحديث الأزرار الملونة (بالاعتماد على data-section، موثوق حتى بعد تحويل الأيقونات لـ SVG)
             document.querySelectorAll('.navbar button').forEach(btn => {
-                btn.classList.remove('active');
-                if (section === 'home' && btn.textContent.includes('🏠')) {
-                    btn.classList.add('active');
-                } else if (section === 'subscribers' && btn.textContent.includes('👤')) {
-                    btn.classList.add('active');
-                } else if (section === 'subscriptions' && btn.textContent.includes('📋')) {
-                    btn.classList.add('active');
-                } else if (section === 'reports' && btn.textContent.includes('📊')) {
-                    btn.classList.add('active');
-                } else if (section === 'security' && btn.textContent.includes('🔒')) {
-                    btn.classList.add('active');
-                } else if (section === 'users' && btn.textContent.includes('👥')) {
-                    btn.classList.add('active');
-                } else if (section === 'settings' && btn.textContent.includes('⚙️')) {
-                    btn.classList.add('active');
-                }
+                btn.classList.toggle('active', btn.dataset.section === section);
             });
             
             // تحديث الايقونات
@@ -1953,10 +2002,10 @@
                 phoneCount = parseInt(document.getElementById('phoneCountMixed').value) || 1;
             }
 
-            // حساب السعر الجديد
-            let newPrice = currentSubscription.price; // السعر الأساسي
+            // السعر الجديد: 60₪ لكل رقم شهرياً، أو 55₪ لكل رقم عند 5 أرقام فما فوق
+            let newPrice = 60;
             if (phoneCount >= 5) {
-                newPrice = 55; // السعر الجديد عند 5 أرقام فما فوق
+                newPrice = 55; // السعر المخفض عند 5 أرقام فما فوق
             }
 
             document.getElementById('pricePerItem').value = newPrice;
@@ -1967,13 +2016,20 @@
         function calculateTotalPrice() {
             const totalPriceDisplay = document.getElementById('totalPriceDisplay');
             const totalPriceInput = document.getElementById('totalPrice');
+            const months = parseInt(document.getElementById('months').value) || 1;
 
-            if (phoneMode === 'mixed') {
+            if (phoneMode === 'write') {
+                // السعر الجديد: 60₪ لكل شهر (رقم هاتف واحد فقط، بغض النظر عن المحل)
+                const totalPrice = months * 60;
+                totalPriceInput.value = totalPrice + ' ₪';
+                totalPriceDisplay.style.display = 'block';
+            } else if (phoneMode === 'mixed') {
                 const pricePerItem = parseInt(document.getElementById('pricePerItem').value) || 0;
                 const phoneCountMixed = parseInt(document.getElementById('phoneCountMixed').value) || 1;
                 
                 if (pricePerItem > 0 && phoneCountMixed > 0) {
-                    const totalPrice = pricePerItem * phoneCountMixed;
+                    // السعر لكل رقم شهرياً × عدد الأرقام × عدد الأشهر
+                    const totalPrice = pricePerItem * phoneCountMixed * months;
                     totalPriceInput.value = totalPrice + ' ₪';
                     totalPriceDisplay.style.display = 'block';
                 } else {
@@ -1999,6 +2055,7 @@
             // إظهار الحقول المناسبة
             if (mode === 'write') {
                 document.getElementById('phoneWriteField').classList.remove('hidden-field');
+                calculateTotalPrice();
             } else if (mode === 'mixed') {
                 document.getElementById('phoneMixedField').classList.remove('hidden-field');
                 document.getElementById('pricePerItemField').style.display = 'block';
@@ -2028,6 +2085,7 @@
             document.getElementById('pricePerItemField').style.display = 'none';
             
             document.getElementById('paymentModal').classList.add('active');
+            calculateTotalPrice();
             
             // ربط معالجات Enter عند فتح الـ modal
             setTimeout(() => {
@@ -2067,6 +2125,10 @@
                     showAlert(alert, 'رقم الهاتف غير صحيح (9-10 أرقام)', 'error');
                     return;
                 }
+
+                // السعر الجديد: 60₪ لكل شهر (بغض النظر عن المحل)
+                totalPrice = months * 60;
+                pricePerItem = 60;
             } else if (phoneMode === 'mixed') {
                 phone = document.getElementById('subscriberPhoneMixed').value;
                 phoneCount = parseInt(document.getElementById('phoneCountMixed').value) || 1;
@@ -2089,7 +2151,8 @@
                     return;
                 }
                 
-                totalPrice = pricePerItem * phoneCount;
+                // السعر لكل رقم شهرياً × عدد الأرقام × عدد الأشهر
+                totalPrice = pricePerItem * phoneCount * months;
             }
 
             if (months < 1) {
@@ -2296,6 +2359,113 @@
             updateUsersList();
         }
 
+        // ===== نظام التأمين (مستقل تماماً عن الاشتراكات والفواتير) =====
+
+        function loadInsuranceData() {
+            return JSON.parse(localStorage.getItem('insuranceSales') || '[]');
+        }
+
+        function saveInsuranceData(data) {
+            localStorage.setItem('insuranceSales', JSON.stringify(data));
+            pushToFirebase();
+        }
+
+        // إضافة عملية تأمين جديدة
+        function addInsurance() {
+            const alertBox = document.getElementById('alertInsurance');
+            const insuranceName = document.getElementById('insuranceName').value.trim();
+            const customerName = document.getElementById('insuranceCustomer').value.trim();
+            const phone = document.getElementById('insurancePhone').value.trim();
+            const amount = parseFloat(document.getElementById('insuranceAmount').value);
+
+            if (!insuranceName) {
+                showAlert(alertBox, 'يرجى إدخال اسم التأمين', 'error');
+                return;
+            }
+            if (!customerName) {
+                showAlert(alertBox, 'يرجى إدخال اسم الزبون', 'error');
+                return;
+            }
+            if (!phone) {
+                showAlert(alertBox, 'يرجى إدخال الرقم', 'error');
+                return;
+            }
+            if (!amount || amount <= 0) {
+                showAlert(alertBox, 'يرجى إدخال مبلغ صحيح', 'error');
+                return;
+            }
+
+            const insuranceSales = loadInsuranceData();
+            insuranceSales.unshift({
+                insuranceName,
+                customerName,
+                phone,
+                amount,
+                date: new Date().toLocaleDateString('ar-EG')
+            });
+            saveInsuranceData(insuranceSales);
+            addSecurityLog(`🛡️ تسجيل تأمين: ${insuranceName} - ${customerName} - ${amount}₪`);
+
+            // تفريغ الحقول
+            document.getElementById('insuranceName').value = '';
+            document.getElementById('insuranceCustomer').value = '';
+            document.getElementById('insurancePhone').value = '';
+            document.getElementById('insuranceAmount').value = '';
+
+            showAlert(alertBox, 'تم تسجيل عملية التأمين بنجاح', 'success');
+            updateInsuranceList();
+        }
+
+        // حذف عملية تأمين
+        function deleteInsuranceDirect(index) {
+            if (!confirm('هل تريد حذف عملية التأمين هذه؟')) return;
+
+            const insuranceSales = loadInsuranceData();
+            const item = insuranceSales[index];
+            if (!item) return;
+
+            insuranceSales.splice(index, 1);
+            saveInsuranceData(insuranceSales);
+            addSecurityLog(`🗑️ حذف تأمين: ${item.insuranceName} - ${item.customerName} - ${item.amount}₪`);
+            updateInsuranceList();
+        }
+
+        // عرض قائمة وإحصائيات التأمين
+        function updateInsuranceList() {
+            const tbody = document.getElementById('insuranceTable');
+            const countEl = document.getElementById('insuranceCount');
+            const totalEl = document.getElementById('insuranceTotal');
+            if (!tbody) return;
+
+            const insuranceSales = loadInsuranceData();
+
+            if (countEl) countEl.textContent = insuranceSales.length;
+            if (totalEl) {
+                const total = insuranceSales.reduce((sum, i) => sum + (i.amount || 0), 0);
+                totalEl.textContent = `₪ ${total.toLocaleString('ar-EG')}`;
+            }
+
+            if (insuranceSales.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">لا توجد بيانات</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = insuranceSales.map((item, index) => `
+                <tr>
+                    <td data-label="التاريخ">${item.date}</td>
+                    <td data-label="اسم التأمين">${item.insuranceName}</td>
+                    <td data-label="اسم الزبون">${item.customerName}</td>
+                    <td data-label="الرقم">${item.phone}</td>
+                    <td data-label="المبلغ">${item.amount}₪</td>
+                    <td data-label="حذف">
+                        <button class="delete-btn" onclick="deleteInsuranceDirect(${index})">حذف</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            convertEmojisToSVG();
+        }
+
         // نظام حذف محسّن
         let deleteHandlersAttached = false;
 
@@ -2316,6 +2486,36 @@
             if (loginPassword) {
                 loginPassword.addEventListener('keypress', (e) => {
                     if (e.key === 'Enter') handleLogin();
+                });
+            }
+
+            // التأمين
+            const insuranceName = document.getElementById('insuranceName');
+            const insuranceCustomer = document.getElementById('insuranceCustomer');
+            const insurancePhone = document.getElementById('insurancePhone');
+            const insuranceAmount = document.getElementById('insuranceAmount');
+
+            if (insuranceName) {
+                insuranceName.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') insuranceCustomer?.focus();
+                });
+            }
+            if (insuranceCustomer) {
+                insuranceCustomer.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') insurancePhone?.focus();
+                });
+            }
+            if (insurancePhone) {
+                insurancePhone.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') insuranceAmount?.focus();
+                });
+            }
+            if (insuranceAmount) {
+                insuranceAmount.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addInsurance();
+                    }
                 });
             }
 
@@ -2538,6 +2738,7 @@
             updateSubscriptionsList();
             updateUsersList();
             updateHomeLocations();
+            updateInsuranceList();
             
             // تحديث الايقونات SVG والـ Enter handlers
             setTimeout(() => {
@@ -2618,6 +2819,7 @@
                     localStorage.setItem('subscriptions', JSON.stringify(remoteData.subscriptions || []));
                     localStorage.setItem('settings', JSON.stringify(remoteData.settings || {}));
                     localStorage.setItem('securityLogs', JSON.stringify(remoteData.securityLogs || []));
+                    localStorage.setItem('insuranceSales', JSON.stringify(remoteData.insuranceSales || []));
                     localStorage.setItem('siteLocked', remoteData.siteLocked || 'false');
                     localStorage.setItem('siteLockPin', remoteData.siteLockPin || '');
                     if (remoteData.adminPassword) localStorage.setItem(btoa('adminPassword'), remoteData.adminPassword);
@@ -2628,6 +2830,7 @@
                     localStorage.setItem('subscribers', JSON.stringify([]));
                     localStorage.setItem('subscriptions', JSON.stringify([]));
                     localStorage.setItem('settings', JSON.stringify({}));
+                    localStorage.setItem('insuranceSales', JSON.stringify([]));
                 }
                 isSyncingFromFirebase = false;
 
