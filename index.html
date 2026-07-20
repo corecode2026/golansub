@@ -1206,12 +1206,12 @@
 
             <div class="form-group" id="pricePerItemField" style="display: none;">
                 <label>السعر لكل رقم (₪)</label>
-                <input type="number" id="pricePerItem" placeholder="السعر لكل رقم" step="10">
+                <input type="number" id="pricePerItem" placeholder="السعر لكل رقم" step="10" oninput="calculateTotalPrice()">
             </div>
 
             <div class="form-group" id="totalPriceDisplay" style="display: none;">
-                <label>المبلغ الكلي المدفوع</label>
-                <input type="text" id="totalPrice" disabled style="background: rgba(255, 255, 255, 0.2); cursor: not-allowed;">
+                <label>المبلغ الكلي المدفوع <span style="opacity: 0.6; font-weight: normal;">(قابل للتعديل - اكتب المبلغ الفعلي لو مختلف)</span></label>
+                <input type="text" id="totalPrice" inputmode="decimal">
             </div>
 
             <button class="btn btn-primary" onclick="processPayment()">✅ تأكيد الدفع</button>
@@ -2158,6 +2158,13 @@
             if (months < 1) {
                 showAlert(alert, 'يرجى إدخال عدد أشهر صحيح', 'error');
                 return;
+            }
+
+            // المبلغ الكلي المدفوع قابل للتعديل اليدوي - نأخذ القيمة الظاهرة بالحقل كمصدر نهائي
+            // (سواء كانت محسوبة تلقائياً أو معدّلة يدوياً من قبل المستخدم)
+            const totalPriceFieldValue = parseFloat(document.getElementById('totalPrice').value);
+            if (!isNaN(totalPriceFieldValue) && totalPriceFieldValue >= 0) {
+                totalPrice = totalPriceFieldValue;
             }
 
             const { users, subscribers, subscriptions, settings } = loadData();
